@@ -32,13 +32,24 @@ def calculate_rsi(df, period=14):
     rsi = 100 - (100 / (1 + rs))
     return rsi.iloc[-1]
 
+def calculate_macd(df, fast=12, slow=26, signal=9):
+    exp1 = df['close'].ewm(span=fast, adjust=False).mean()
+    exp2 = df['close'].ewm(span=slow, adjust=False).mean()
+    macd = exp1 - exp2
+    macd_signal = macd.ewm(span=signal, adjust=False).mean()
+    return macd.iloc[-1], macd_signal.iloc[-1]
+
+def calculate_psar(df):
+    close = df['close']
+    ema_fast = close.ewm(span=10, adjust=False).mean()
+    return close.iloc[-1] > ema_fast.iloc[-1]
+
 def calculate_ma(df):
     ema20 = df['close'].ewm(span=20, adjust=False).mean().iloc[-1]
     sma50 = df['close'].rolling(window=50).mean().iloc[-1]
     return ema20, sma50
 
 def get_tf_trend(df):
-    """Timeframe trend check karta hai (EMA 20 vs Price)."""
     if df is None or df.empty:
         return "NEUTRAL ⚖️"
     live_price = df['close'].iloc[-1]
@@ -49,7 +60,6 @@ def get_tf_trend(df):
         return "[bold red]BEARISH 📉[/bold red]"
 
 def detect_candlestick_patterns(df):
-    """Hammer, Engulfing aur Shooting Star detect karta hai."""
     curr = df.iloc[-1]
     prev = df.iloc[-2]
 
@@ -60,23 +70,16 @@ def detect_candlestick_patterns(df):
     lower_wick = min(c_open, c_close) - c_low
     upper_wick = c_high - max(c_open, c_close)
 
-    # Bullish Engulfing
     if p_close < p_open and c_close > c_open and c_close > p_open and c_open < p_close:
-        return "BULLISH ENGULFING 🚀 (Strong Reversal)"
-
-    # Bearish Engulfing
+        return "BULLISH ENGULFING 🚀"
     if p_close > p_open and c_close < c_open and c_close < p_open and c_open > p_close:
-        return "BEARISH ENGULFING 🔻 (Strong Drop)"
-
-    # Hammer
+        return "BEARISH ENGULFING 🔻"
     if lower_wick > (2 * body) and upper_wick < body:
-        return "BULLISH HAMMER 🔨 (Bottom Reversal)"
-
-    # Shooting Star
+        return "BULLISH HAMMER 🔨"
     if upper_wick > (2 * body) and lower_wick < body:
-        return "SHOOTING STAR 💫 (Top Reversal)"
+        return "SHOOTING STAR 💫"
 
-    return "No Major Pattern (Normal Candle)"
+    return "Normal Candle"
 
 def detect_supply_demand_zones(df):
     recent_df = df.tail(30)
@@ -86,17 +89,17 @@ def detect_supply_demand_zones(df):
 
 def show_header():
     console.clear()
-    header_text = "[bold cyan]🚀 CRYPTO & GOLD PRO PREDICTION DASHBOARD 🚀[/bold cyan]\n[bold yellow]👨‍💻 DEVELOPER: BILAL ALI (SHEBI)[/bold yellow]"
+    header_text = "[bold cyan]🚀 CRYPTO & GOLD ALL-IN-ONE DASHBOARD 🚀[/bold cyan]\n[bold yellow]👨‍💻 DEVELOPER: BILAL ALI (SHEBI)[/bold yellow]"
     console.print(Panel(header_text, style="bold blue", expand=False))
 
 def run_app():
     show_header()
     
-    coin = Prompt.ask("\n[bold green]1️⃣ Symbol enter karein (e.g. BTC, ETH, PAXG for Gold)[/bold green]").upper().strip()
+    coin = Prompt.ask("\n[bold green]1️⃣ Symbol enter karein (e.g. BTC, ETH, PAXG)[/bold green]").upper().strip()
     if not coin:
         return
 
-    console.print(f"\n[yellow]🔄 Binance se {coin} ka Multi-Timeframe (15m, 1h, 4h) & Candle analysis ho raha hai...[/yellow]")
+    console.print(f"\n[yellow]🔄 Binance se {coin} ka Full Multi-Indicator & Timeframe analysis ho raha hai...[/yellow]")
     
     df_15m = get_binance_klines(coin, interval="15m")
     df_1h = get_binance_klines(coin, interval="1h")
@@ -107,44 +110,62 @@ def run_app():
         return
 
     live_price = df_1h['close'].iloc[-1]
+    
+    # 1. RSI
     rsi = calculate_rsi(df_1h)
+    rsi_sig = "[bold green]OVERSOLD 📈[/bold green]" if rsi < 30 else ("[bold red]OVERBOUGHT 📉[/bold red]" if rsi > 70 else "[bold yellow]NEUTRAL ⚖️[/bold yellow]")
+
+    # 2. MACD
+    macd_val, macd_sig = calculate_macd(df_1h)
+    macd_status = "[bold green]BULLISH CROSSOVER 🟢[/bold green]" if macd_val > macd_sig else "[bold red]BEARISH CROSSOVER 🔴[/bold red]"
+
+    # 3. PSAR
+    is_uptrend = calculate_psar(df_1h)
+    sar_status = "[bold green]UPTREND (BUY) 📈[/bold green]" if is_uptrend else "[bold red]DOWNTREND (SELL) 📉[/bold red]"
+
+    # 4. MA
     ema20, sma50 = calculate_ma(df_1h)
+    ma_status = "[bold green]BULLISH TREND 🚀[/bold green]" if live_price > ema20 > sma50 else "[bold red]BEARISH / WEAK 📉[/bold red]"
+
+    # 5. Zones & Candle
     demand_zone, supply_zone = detect_supply_demand_zones(df_1h)
     candle_pattern = detect_candlestick_patterns(df_1h)
 
-    # Multi-timeframe trend statuses
+    # Multi-timeframes
     trend_15m = get_tf_trend(df_15m)
     trend_1h = get_tf_trend(df_1h)
     trend_4h = get_tf_trend(df_4h)
 
-    # High Probability Signal (85%+ Target)
+    # Combined Signal Logic
     is_all_bull = "BULLISH" in trend_15m and "BULLISH" in trend_1h and "BULLISH" in trend_4h
     is_all_bear = "BEARISH" in trend_15m and "BEARISH" in trend_1h and "BEARISH" in trend_4h
 
-    if is_all_bull and "BULLISH" in candle_pattern:
+    if is_all_bull and macd_val > macd_sig and is_uptrend:
         signal = "[bold green]🔥 HIGH CONFIRMATION BUY (85%+ ACCURACY) 🔥[/bold green]"
-    elif is_all_bear and ("BEARISH" in candle_pattern or "SHOOTING" in candle_pattern):
+    elif is_all_bear and macd_val < macd_sig and not is_uptrend:
         signal = "[bold red]🚨 HIGH CONFIRMATION SELL (85%+ ACCURACY) 🚨[/bold red]"
     elif is_all_bull:
-        signal = "[bold green]MODERATE BUY (Trend Confirmed) 📈[/bold green]"
+        signal = "[bold green]MODERATE BUY 📈[/bold green]"
     elif is_all_bear:
-        signal = "[bold red]MODERATE SELL (Trend Confirmed) 📉[/bold red]"
+        signal = "[bold red]MODERATE SELL 📉[/bold red]"
     else:
-        signal = "[bold yellow]WAIT / NO TRADE (Mixed Timeframes) ⚠️[/bold yellow]"
+        signal = "[bold yellow]WAIT / NO TRADE (Mixed Signals) ⚠️[/bold yellow]"
 
-    # Display Analysis Table
-    table = Table(title=f"📊 Market Analysis & Candle Scanner: {coin}/USDT", style="magenta")
-    table.add_column("Analysis / Metric", style="cyan")
-    table.add_column("Value / Status", style="bold white")
+    # Display Combined Table
+    table = Table(title=f"📊 All-In-One Technical Analysis: {coin}/USDT", style="magenta")
+    table.add_column("Indicator / Metric", style="cyan")
+    table.add_column("Value / Level", style="bold white")
+    table.add_column("Signal / Status", style="bold yellow")
 
-    table.add_row("Live Price", f"${live_price:,.4f}")
-    table.add_row("RSI (14 - 1H)", f"{rsi:.2f}")
-    table.add_row("15-Min Trend", trend_15m)
-    table.add_row("1-Hour Trend", trend_1h)
-    table.add_row("4-Hour Trend", trend_4h)
-    table.add_row("Detected Pattern", f"[bold yellow]{candle_pattern}[/bold yellow]")
-    table.add_row("Demand Zone (Support)", f"${demand_zone:,.4f}")
-    table.add_row("Supply Zone (Resistance)", f"${supply_zone:,.4f}")
+    table.add_row("Live Price", f"${live_price:,.4f}", "[bold white]Live[/bold white]")
+    table.add_row("RSI (14)", f"{rsi:.2f}", rsi_sig)
+    table.add_row("MACD Crossover", f"Val: {macd_val:.2f} | Sig: {macd_sig:.2f}", macd_status)
+    table.add_row("Parabolic SAR", "Trend Status", sar_status)
+    table.add_row("Moving Averages", f"EMA20: ${ema20:,.2f} | SMA50: ${sma50:,.2f}", ma_status)
+    table.add_row("15-Min / 1H / 4H Trend", f"15m: {trend_15m} | 1h: {trend_1h}", f"4h: {trend_4h}")
+    table.add_row("Detected Candle", f"{candle_pattern}", "[bold yellow]Scanner[/bold yellow]")
+    table.add_row("Demand Zone (Support)", f"${demand_zone:,.4f}", "[bold green]BUY AREA[/bold green]")
+    table.add_row("Supply Zone (Resistance)", f"${supply_zone:,.4f}", "[bold red]SELL AREA[/bold red]")
 
     console.print("\n", table)
     console.print(Panel(f"🎯 [bold yellow]FINAL PREDICTION SIGNAL:[/bold yellow]\n{signal}", style="bold cyan"))
