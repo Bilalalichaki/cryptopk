@@ -1,4 +1,4 @@
-limport requests
+import requests
 import pandas as pd
 import numpy as np
 from rich.console import Console
