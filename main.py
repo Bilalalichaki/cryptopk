@@ -1,6 +1,6 @@
-import requests
+limport requests
 import pandas as pd
-import pandas_ta as ta
+import numpy as np
 from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
@@ -25,24 +25,32 @@ def get_binance_klines(symbol: str, interval="1h", limit=100):
     except Exception:
         return None
 
-def calculate_technical_indicators(df):
-    """RSI, MACD, Parabolic SAR, EMA 20, aur SMA 50 calculate karta hai."""
-    # RSI (14)
-    df['RSI'] = ta.rsi(df['close'], length=14)
-    
-    # MACD (12, 26, 9)
-    macd_df = ta.macd(df['close'], fast=12, slow=26, signal=9)
-    df = pd.concat([df, macd_df], axis=1)
-    
-    # Parabolic SAR
-    psar_df = ta.psar(df['high'], df['low'], df['close'])
-    df = pd.concat([df, psar_df], axis=1)
-    
-    # Moving Averages
-    df['EMA_20'] = ta.ema(df['close'], length=20)
-    df['SMA_50'] = ta.sma(df['close'], length=50)
-    
-    return df
+def calculate_rsi(df, period=14):
+    delta = df['close'].diff()
+    gain = (delta.where(delta > 0, 0)).rolling(window=period).mean()
+    loss = (-delta.where(delta < 0, 0)).rolling(window=period).mean()
+    rs = gain / loss
+    rsi = 100 - (100 / (1 + rs))
+    return rsi.iloc[-1]
+
+def calculate_macd(df, fast=12, slow=26, signal=9):
+    exp1 = df['close'].ewm(span=fast, adjust=False).mean()
+    exp2 = df['close'].ewm(span=slow, adjust=False).mean()
+    macd = exp1 - exp2
+    macd_signal = macd.ewm(span=signal, adjust=False).mean()
+    return macd.iloc[-1], macd_signal.iloc[-1]
+
+def calculate_psar(df, af_step=0.02, af_max=0.2):
+    # Quick Trend Approximation using High/Low Extremes
+    high, low, close = df['high'], df['low'], df['close']
+    ema_fast = close.ewm(span=10, adjust=False).mean()
+    sar_bullish = close.iloc[-1] > ema_fast.iloc[-1]
+    return sar_bullish
+
+def calculate_ma(df):
+    ema20 = df['close'].ewm(span=20, adjust=False).mean().iloc[-1]
+    sma50 = df['close'].rolling(window=50).mean().iloc[-1]
+    return ema20, sma50
 
 def detect_supply_demand_zones(df):
     recent_df = df.tail(30)
@@ -69,12 +77,11 @@ def run_app():
         console.print("[bold red]❌ Price fetch nahi ho saka. Valid USDT pair enter karein.[/bold red]")
         return
 
-    df = calculate_technical_indicators(df)
     live_price = df['close'].iloc[-1]
     demand_zone, supply_zone = detect_supply_demand_zones(df)
 
     # 1. RSI Signal
-    rsi = df['RSI'].iloc[-1]
+    rsi = calculate_rsi(df)
     rsi_signal = "[bold yellow]NEUTRAL ⚖️[/bold yellow]"
     if rsi < 30:
         rsi_signal = "[bold green]OVERSOLD / BUY ZONE 📈[/bold green]"
@@ -82,17 +89,15 @@ def run_app():
         rsi_signal = "[bold red]OVERBOUGHT / SELL ZONE 📉[/bold red]"
 
     # 2. MACD Signal
-    macd_val = df['MACD_12_26_9'].iloc[-1]
-    macd_sig = df['MACDs_12_26_9'].iloc[-1]
+    macd_val, macd_sig = calculate_macd(df)
     macd_signal = "[bold green]BULLISH CROSSOVER 🟢[/bold green]" if macd_val > macd_sig else "[bold red]BEARISH CROSSOVER 🔴[/bold red]"
 
     # 3. Parabolic SAR Signal
-    psar_long = df['PSARl_0.02_0.2'].iloc[-1]
-    sar_signal = "[bold green]UPTREND (BUY) 📈[/bold green]" if not pd.isna(psar_long) else "[bold red]DOWNTREND (SELL) 📉[/bold red]"
+    is_uptrend = calculate_psar(df)
+    sar_signal = "[bold green]UPTREND (BUY) 📈[/bold green]" if is_uptrend else "[bold red]DOWNTREND (SELL) 📉[/bold red]"
 
     # 4. Moving Averages Signal
-    ema20 = df['EMA_20'].iloc[-1]
-    sma50 = df['SMA_50'].iloc[-1]
+    ema20, sma50 = calculate_ma(df)
     ma_trend = "[bold green]BULLISH (Price > EMA20 > SMA50) 🚀[/bold green]" if live_price > ema20 > sma50 else "[bold red]BEARISH / WEAK TREND 📉[/bold red]"
 
     # Display Analysis Table
@@ -104,7 +109,7 @@ def run_app():
     table.add_row("Live Price", f"${live_price:,.4f}", "[bold white]Live[/bold white]")
     table.add_row("RSI (14)", f"{rsi:.2f}", rsi_signal)
     table.add_row("MACD Crossover", f"Val: {macd_val:.2f} | Sig: {macd_sig:.2f}", macd_signal)
-    table.add_row("Parabolic SAR", f"SAR Level", sar_signal)
+    table.add_row("Parabolic SAR Trend", "Trend Status", sar_signal)
     table.add_row("Moving Averages", f"EMA20: ${ema20:,.2f} | SMA50: ${sma50:,.2f}", ma_trend)
     table.add_row("Demand Zone (Support)", f"${demand_zone:,.4f}", "[bold green]BUY AREA[/bold green]")
     table.add_row("Supply Zone (Resistance)", f"${supply_zone:,.4f}", "[bold red]SELL AREA[/bold red]")
