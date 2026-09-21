@@ -5,6 +5,7 @@ from rich.panel import Panel
 from rich.table import Table
 from rich.prompt import Prompt
 from rich.text import Text
+from rich.rule import Rule
 
 console = Console()
 
@@ -62,8 +63,8 @@ def check_volume_spike(df):
     avg_vol = df['volume'].tail(20).mean()
     curr_vol = df['volume'].iloc[-1]
     if curr_vol > (avg_vol * 1.5):
-        return "[bold green]HIGH VOLUME SPIKE ⚡[/bold green]"
-    return "Normal Volume"
+        return "[bold bright_green]HIGH VOLUME SPIKE ⚡ (PROFIT CHANCE)[/bold bright_green]", "green"
+    return "[bold yellow]NORMAL VOLUME ⚖️[/bold yellow]", "yellow"
 
 def calculate_pivot_points(df):
     prev_high = df['high'].iloc[-2]
@@ -78,13 +79,13 @@ def calculate_pivot_points(df):
 
 def get_tf_trend(df):
     if df is None or df.empty:
-        return "NEUTRAL ⚖️"
+        return "[bold yellow]NEUTRAL ⚖️[/bold yellow]"
     live_price = df['close'].iloc[-1]
     ema20 = df['close'].ewm(span=20, adjust=False).mean().iloc[-1]
     if live_price > ema20:
-        return "[bold green]BULLISH 📈[/bold green]"
+        return "[bold green]BULLISH 📈 (PROFIT ZONE)[/bold green]"
     else:
-        return "[bold red]BEARISH 📉[/bold red]"
+        return "[bold red]BEARISH 📉 (LOSS ZONE)[/bold red]"
 
 def detect_candlestick_patterns(df):
     curr = df.iloc[-1]
@@ -96,14 +97,14 @@ def detect_candlestick_patterns(df):
     upper_wick = c_high - max(c_open, c_close)
 
     if p_close < p_open and c_close > c_open and c_close > p_open and c_open < p_close:
-        return "BULLISH ENGULFING 🚀"
+        return "[bold green]BULLISH ENGULFING 🚀 (BUY SIGNAL)[/bold green]"
     if p_close > p_open and c_close < c_open and c_close < p_open and c_open > p_close:
-        return "BEARISH ENGULFING 🔻"
+        return "[bold red]BEARISH ENGULFING 🔻 (SELL SIGNAL)[/bold red]"
     if lower_wick > (2 * body) and upper_wick < body:
-        return "BULLISH HAMMER 🔨"
+        return "[bold green]BULLISH HAMMER 🔨 (BUY SIGNAL)[/bold green]"
     if upper_wick > (2 * body) and lower_wick < body:
-        return "SHOOTING STAR 💫"
-    return "Normal Candle"
+        return "[bold red]SHOOTING STAR 💫 (SELL SIGNAL)[/bold red]"
+    return "[bold yellow]NORMAL CANDLE ⚖️[/bold yellow]"
 
 def detect_supply_demand_zones(df):
     recent_df = df.tail(30)
@@ -135,18 +136,42 @@ def run_app():
 
     live_price = df_1h['close'].iloc[-1]
     
-    # Indicators Calculation
+    # 1. Indicator Calculations
     rsi = calculate_rsi(df_1h)
-    rsi_sig = "[bold green]OVERSOLD 📈[/bold green]" if rsi < 30 else ("[bold red]OVERBOUGHT 📉[/bold red]" if rsi > 70 else "[bold yellow]NEUTRAL ⚖️[/bold yellow]")
+    if rsi < 30:
+        rsi_txt = f"[bold green]RSI: {rsi:.2f} -> OVERSOLD 📈 (PROFIT / BUY AREA)[/bold green]"
+        rsi_color = "green"
+    elif rsi > 70:
+        rsi_txt = f"[bold red]RSI: {rsi:.2f} -> OVERBOUGHT 📉 (LOSS RISK / SELL AREA)[/bold red]"
+        rsi_color = "red"
+    else:
+        rsi_txt = f"[bold yellow]RSI: {rsi:.2f} -> NEUTRAL ⚖️ (SAFE HOLD)[/bold yellow]"
+        rsi_color = "yellow"
+
     macd_val, macd_sig = calculate_macd(df_1h)
-    macd_status = "[bold green]BULLISH CROSSOVER 🟢[/bold green]" if macd_val > macd_sig else "[bold red]BEARISH CROSSOVER 🔴[/bold red]"
+    if macd_val > macd_sig:
+        macd_txt = f"[bold green]Val: {macd_val:.2f} | Sig: {macd_sig:.2f} -> BULLISH CROSSOVER 🟢 (PROFIT)[/bold green]"
+        macd_color = "green"
+    else:
+        macd_txt = f"[bold red]Val: {macd_val:.2f} | Sig: {macd_sig:.2f} -> BEARISH CROSSOVER 🔴 (LOSS)[/bold red]"
+        macd_color = "red"
+
     is_uptrend = calculate_psar(df_1h)
-    sar_status = "[bold green]UPTREND (BUY) 📈[/bold green]" if is_uptrend else "[bold red]DOWNTREND (SELL) 📉[/bold red]"
+    psar_txt = "[bold green]UPTREND 📈 (PROFIT TREND)[/bold green]" if is_uptrend else "[bold red]DOWNTREND 📉 (LOSS TREND)[/bold red]"
+    psar_color = "green" if is_uptrend else "red"
+
     ema20, sma50 = calculate_ma(df_1h)
-    ma_status = "[bold green]BULLISH TREND 🚀[/bold green]" if live_price > ema20 > sma50 else "[bold red]BEARISH / WEAK 📉[/bold red]"
+    if live_price > ema20 > sma50:
+        ma_txt = f"[bold green]EMA20 (${ema20:,.2f}) > SMA50 (${sma50:,.2f}) -> STRONG BULLISH 🚀[/bold green]"
+        ma_color = "green"
+    else:
+        ma_txt = f"[bold red]EMA20 (${ema20:,.2f}) < SMA50 (${sma50:,.2f}) -> WEAK / BEARISH 📉[/bold red]"
+        ma_color = "red"
+
     upper_bb, lower_bb = calculate_bollinger_bands(df_1h)
-    bb_status = "[bold red]OVERBOUGHT[/bold red]" if live_price >= upper_bb else ("[bold green]OVERSOLD[/bold green]" if live_price <= lower_bb else "In Channel")
-    vol_status = check_volume_spike(df_1h)
+    bb_txt = f"Upper Band: [bold red]${upper_bb:,.2f}[/bold red] | Lower Band: [bold green]${lower_bb:,.2f}[/bold green]"
+    
+    vol_txt, vol_color = check_volume_spike(df_1h)
     pivot, s1, s2, r1, r2 = calculate_pivot_points(df_1h)
     demand_zone, supply_zone = detect_supply_demand_zones(df_1h)
     candle_pattern = detect_candlestick_patterns(df_1h)
@@ -158,77 +183,117 @@ def run_app():
     is_all_bull = "BULLISH" in trend_15m and "BULLISH" in trend_1h and "BULLISH" in trend_4h
     is_all_bear = "BEARISH" in trend_15m and "BEARISH" in trend_1h and "BEARISH" in trend_4h
 
-    # Signal & Levels Prediction Logic
+    # Signal & Predictions
     if is_all_bull and macd_val > macd_sig:
-        signal_text = "HIGH CONFIRMATION BUY / LONG 🚀"
-        entry_pred = live_price
+        signal_text = "[bold green]HIGH CONFIRMATION BUY / LONG 🚀 (PROFIT SPOT)[/bold green]"
         tp_pred = live_price * 1.025
         sl_pred = demand_zone * 0.995 if demand_zone < live_price else live_price * 0.985
     elif is_all_bear and macd_val < macd_sig:
-        signal_text = "HIGH CONFIRMATION SELL / SHORT 🚨"
-        entry_pred = live_price
+        signal_text = "[bold red]HIGH CONFIRMATION SELL / SHORT 🚨 (LOSS RISK)[/bold red]"
         tp_pred = live_price * 0.975
         sl_pred = supply_zone * 1.005 if supply_zone > live_price else live_price * 1.015
     else:
-        signal_text = "WAIT / NO TRADE (Mixed Signals) ⚠️"
-        entry_pred = live_price
+        signal_text = "[bold yellow]WAIT / NO TRADE ⚠️ (SIDEWAYS MARKET)[/bold yellow]"
         tp_pred = live_price * 1.015
         sl_pred = live_price * 0.99
 
-    # SECTION 1: COLOR-CODED PREDICTION CARDS (SEPARATE BOXES)
-    console.print("\n[bold cyan]------------------ 🎯 PREDICTION SIGNALS ------------------[/bold cyan]")
-    
+    # -------------------------------------------------------------
+    # SECTION 1: PREDICTION SIGNALS (YELLOW ENTRY, GREEN TP, RED SL)
+    # -------------------------------------------------------------
+    console.print("\n")
+    console.print(Rule(title="[bold yellow]🟡 ENTRY / 🟢 PROFIT / 🔴 STOP LOSS PREDICTIONS[/bold yellow]", style="yellow"))
+
     console.print(Panel(
-        f"[bold white]PRICE:[/bold white] [bold yellow]${entry_pred:,.4f}[/bold yellow]\n[bold white]Note:[/bold white] Live Market Rate par Entry leni hai.",
-        title="[bold yellow]🟡 SAFE ENTRY PREDICTION[/bold yellow]",
+        f"[bold white]LIVE ENTRY RATE:[/bold white] [bold yellow]${live_price:,.4f}[/bold yellow]\n"
+        f"[bold yellow]📌 Action:[/bold yellow] Yeh aapka SAFE ENTRY point hai.",
+        title="[bold yellow]🟡 SAFE ENTRY PREDICTION (YELLOW)[/bold yellow]",
         style="yellow"
     ))
 
     console.print(Panel(
-        f"[bold white]TARGET RATE:[/bold white] [bold green]${tp_pred:,.4f}[/bold green]\n[bold white]Note:[/bold white] Yahan profit book karke exit karein.",
-        title="[bold green]🟢 TAKE PROFIT (TP) PREDICTION[/bold green]",
+        f"[bold white]TARGET RATE (TP):[/bold white] [bold green]${tp_pred:,.4f}[/bold green]\n"
+        f"[bold green]💰 Action:[/bold green] Yahan target hit hote hi PROFIT book karein.",
+        title="[bold green]🟢 TAKE PROFIT PREDICTION (GREEN)[/bold green]",
         style="green"
     ))
 
     console.print(Panel(
-        f"[bold white]STOP LOSS RATE:[/bold white] [bold red]${sl_pred:,.4f}[/bold red]\n[bold white]Note:[/bold white] Trade galat jaane par yahan auto-close ho.",
-        title="[bold red]🔴 STOP LOSS (SL) PREDICTION[/bold red]",
+        f"[bold white]STOP LOSS RATE (SL):[/bold white] [bold red]${sl_pred:,.4f}[/bold red]\n"
+        f"[bold red]🛑 Action:[/bold red] Market ulti jaane par yahan auto-exit ho taake BADA LOSS na ho.",
+        title="[bold red]🔴 STOP LOSS PREDICTION (RED)[/bold red]",
         style="red"
     ))
 
     console.print(Panel(
-        f"[bold cyan]OVERALL SIGNAL:[/bold cyan] [bold white]{signal_text}[/bold white]",
-        title="[bold blue]⚡ FINAL DIRECTION[/bold blue]",
+        f"[bold cyan]AI MARKET DECISION:[/bold cyan] {signal_text}",
+        title="[bold cyan]⚡ OVERALL DIRECTION[/bold cyan]",
         style="cyan"
     ))
 
-    # SECTION 2: ALL TECHNICAL INDICATORS TABLE (SEPARATE SECTION)
-    table = Table(title=f"📊 COMPLETE INDICATORS DASHBOARD ({coin}/USDT)", style="magenta", header_style="bold cyan")
-    table.add_column("Indicator Name", style="cyan")
-    table.add_column("Current Value / Range", style="bold white")
-    table.add_column("Signal Status", style="bold yellow")
+    # -------------------------------------------------------------
+    # SECTION 2: INDIVIDUAL INDICATOR BOXES WITH DIVIDER LINES
+    # -------------------------------------------------------------
+    console.print("\n")
+    console.print(Rule(title=f"[bold magenta]📊 ALL INDICATORS BREAKDOWN ({coin}/USDT)[/bold magenta]", style="magenta"))
 
-    table.add_row("Live Price", f"${live_price:,.4f}", "[bold white]Live[/bold white]")
-    table.add_row("RSI (14)", f"{rsi:.2f}", rsi_sig)
-    table.add_row("MACD Crossover", f"Val: {macd_val:.2f} | Sig: {macd_sig:.2f}", macd_status)
-    table.add_row("Parabolic SAR", "Trend Direction", sar_status)
-    table.add_row("Moving Averages", f"EMA20: ${ema20:,.2f} | SMA50: ${sma50:,.2f}", ma_status)
-    table.add_row("Bollinger Bands", f"Upper: ${upper_bb:,.2f} | Lower: ${lower_bb:,.2f}", bb_status)
-    table.add_row("Volume Status", "20-Bar Volume", vol_status)
-    table.add_row("Pivot Level (P)", f"${pivot:,.4f}", "Central Pivot")
-    table.add_row("Support Levels", f"S1: ${s1:,.2f} | S2: ${s2:,.2f}", "[bold green]BUY AREA[/bold green]")
-    table.add_row("Resistance Levels", f"R1: ${r1:,.2f} | R2: ${r2:,.2f}", "[bold red]SELL AREA[/bold red]")
-    table.add_row("Demand Zone (Support)", f"${demand_zone:,.4f}", "[bold green]STRONG SUPPORT[/bold green]")
-    table.add_row("Supply Zone (Resistance)", f"${supply_zone:,.4f}", "[bold red]STRONG RESISTANCE[/bold red]")
-    table.add_row("15-Min Trend", trend_15m, "Scalp Trend")
-    table.add_row("1-Hour Trend", trend_1h, "Main Trend")
-    table.add_row("4-Hour Trend", trend_4h, "Major Trend")
-    table.add_row("Candle Pattern", candle_pattern, "Pattern Scanner")
+    # RSI Box
+    console.print(Panel(rsi_txt, title="[bold cyan]1️⃣ RSI (14) Indicator[/bold cyan]", style=rsi_color))
+    console.print(Rule(style="dim white"))
 
-    console.print("\n", table)
+    # MACD Box
+    console.print(Panel(macd_txt, title="[bold cyan]2️⃣ MACD Indicator[/bold cyan]", style=macd_color))
+    console.print(Rule(style="dim white"))
 
-    # SECTION 3: SPOT & FUTURE TRADE CALCULATOR (PURANA SPOT BHI SHAMIL HAI)
-    console.print("\n[bold green]2️⃣ Trade Type Select Karein:[/bold green]")
+    # PSAR Box
+    console.print(Panel(psar_txt, title="[bold cyan]3️⃣ Parabolic SAR[/bold cyan]", style=psar_color))
+    console.print(Rule(style="dim white"))
+
+    # MA Box
+    console.print(Panel(ma_txt, title="[bold cyan]4️⃣ Moving Averages (EMA20 vs SMA50)[/bold cyan]", style=ma_color))
+    console.print(Rule(style="dim white"))
+
+    # Bollinger Bands Box
+    console.print(Panel(bb_txt, title="[bold cyan]5️⃣ Bollinger Bands (Channel Range)[/bold cyan]", style="blue"))
+    console.print(Rule(style="dim white"))
+
+    # Volume Box
+    console.print(Panel(vol_txt, title="[bold cyan]6️⃣ Volume Analysis[/bold cyan]", style=vol_color))
+    console.print(Rule(style="dim white"))
+
+    # Pivot & Support/Resistance Box
+    pivot_info = f"""
+[bold white]Pivot Point (P):[/bold white] ${pivot:,.4f}
+[bold green]Support 1 (S1):[/bold green] ${s1:,.4f}  |  [bold green]Support 2 (S2):[/bold green] ${s2:,.4f}  (PROFIT BUY ZONES)
+[bold red]Resistance 1 (R1):[/bold red] ${r1:,.4f}  |  [bold red]Resistance 2 (R2):[/bold red] ${r2:,.4f}  (LOSS SELL ZONES)
+"""
+    console.print(Panel(pivot_info, title="[bold cyan]7️⃣ Pivot Points & Levels[/bold cyan]", style="cyan"))
+    console.print(Rule(style="dim white"))
+
+    # Demand / Supply Box
+    ds_info = f"""
+[bold green]🟢 Demand Zone (Strong Support):[/bold green] ${demand_zone:,.4f} (Safe Buy Area)
+[bold red]🔴 Supply Zone (Strong Resistance):[/bold red] ${supply_zone:,.4f} (Profit Exit Area)
+"""
+    console.print(Panel(ds_info, title="[bold cyan]8️⃣ Demand & Supply Zones[/bold cyan]", style="magenta"))
+    console.print(Rule(style="dim white"))
+
+    # Multi Timeframe Box
+    mtf_info = f"""
+15-Min Scalp: {trend_15m}
+1-Hour Trend: {trend_1h}
+4-Hour Trend: {trend_4h}
+"""
+    console.print(Panel(mtf_info, title="[bold cyan]9️⃣ Multi-Timeframe Alignment[/bold cyan]", style="blue"))
+    console.print(Rule(style="dim white"))
+
+    # Candle Pattern Box
+    console.print(Panel(candle_pattern, title="[bold cyan]🔟 Candlestick Pattern Scanner[/bold cyan]", style="white"))
+
+    # -------------------------------------------------------------
+    # SECTION 3: SPOT & FUTURE CALCULATOR
+    # -------------------------------------------------------------
+    console.print("\n")
+    console.print(Rule(title="[bold green]💰 TRADE RISK & CALCULATOR[/bold green]", style="green"))
     console.print(" [1] Spot Trading 🛒")
     console.print(" [2] Future Trading ⚡")
     trade_type = Prompt.ask("👉 Choice (1 ya 2)", choices=["1", "2"], default="1")
@@ -242,11 +307,11 @@ def run_app():
         is_long = pos == "1"
         leverage = float(Prompt.ask("Leverage (e.g. 10, 20, 50)", default="10"))
 
-    entry_price = float(Prompt.ask("Entry Rate ($)", default=str(round(entry_pred, 4))))
+    entry_price = float(Prompt.ask("Entry Rate ($)", default=str(round(live_price, 4))))
     margin = float(Prompt.ask("Investment / Margin ($)", default="100"))
-    exit_price = float(Prompt.ask("Target Exit Rate ($)", default=str(round(tp_pred, 4))))
+    exit_price = float(Prompt.ask("Target Exit Rate (TP) ($)", default=str(round(tp_pred, 4))))
+    sl_price = float(Prompt.ask("Stop Loss Rate (SL) ($)", default=str(round(sl_pred, 4))))
     pkr_rate = float(Prompt.ask("USD to PKR Rate", default="278.5"))
-    sl_price = float(Prompt.ask("Stop Loss Rate ($)", default=str(round(sl_pred, 4))))
 
     position_size = margin * leverage
     coins = position_size / entry_price
@@ -267,27 +332,21 @@ def run_app():
 
     type_str = f"Future ({'LONG 📈' if is_long else 'SHORT 📉'}) | Leverage: {leverage:.1f}x" if is_future else "SPOT Buying 🛒"
     
-    summary = f"""
+    calc_box = f"""
 📌 Type: [bold white]{type_str}[/bold white]
-🏷️ Entry: [bold yellow]${entry_price:,.4f}[/bold yellow] | Target Exit: [bold green]${exit_price:,.4f}[/bold green]
-🛑 Stop Loss: [bold red]${sl_price:,.4f}[/bold red] (Est. Loss: -${loss_usd:.2f} / -Rs. {loss_pkr:,.2f})
+🟡 Live Entry: [bold yellow]${entry_price:,.4f}[/bold yellow]
+🟢 Target Exit (TP): [bold green]${exit_price:,.4f}[/bold green]
+🔴 Stop Loss (SL): [bold red]${sl_price:,.4f}[/bold red]
 
-💰 Capital Investment: [bold white]${margin:,.2f}[/bold white] (Rs. {margin * pkr_rate:,.2f})
+💵 Capital Margin: [bold white]${margin:,.2f}[/bold white] (Rs. {margin * pkr_rate:,.2f})
+🚀 ESTIMATED PROFIT: [bold green]+${pnl_usd:.2f}[/bold green] (Rs. [bold green]+{pnl_pkr:,.2f}[/bold green]) | [bold green]ROE: +{roe:.2f}%[/bold green]
+🛑 ESTIMATED LOSS (SL): [bold red]-${loss_usd:.2f}[/bold red] (Rs. [bold red]-{loss_pkr:,.2f}[/bold red])
+⚖️ Risk to Reward: [bold cyan]1 : {risk_reward:.2f}[/bold cyan]
 """
     if is_future:
-        summary += f"🔍 Total Position Volume: [bold white]${position_size:,.2f}[/bold white] ({coins:.4f} {coin})\n"
-    else:
-        summary += f"🪙 Coins Purchased: [bold white]{coins:.4f} {coin}[/bold white]\n"
+        calc_box += f"💥 LIQUIDATION PRICE: [bold red]${liq_price:,.4f}[/bold red]\n"
 
-    summary += f"""
-🚀 Estimated Profit (PnL): [bold green]+${pnl_usd:.2f}[/bold green] (Rs. [bold green]+{pnl_pkr:,.2f}[/bold green])
-📊 Return on Investment (ROI): [bold green]+{roe:.2f}%[/bold green]
-⚖️ Risk to Reward Ratio: [bold cyan]1 : {risk_reward:.2f}[/bold cyan]
-"""
-    if is_future:
-        summary += f"💥 Est. Liquidation Price: [bold red]${liq_price:,.4f}[/bold red]\n"
-
-    console.print(Panel(summary, title="[bold green]📊 FINAL TRADE CALCULATION[/bold green]", style="green"))
+    console.print(Panel(calc_box, title="[bold green]🟢 FINAL TRADE ESTIMATION (PROFIT & LOSS)[/bold green]", style="green"))
     console.print("\n[bold yellow]👨‍💻 DEVELOPER: BILAL ALI (SHEBI)[/bold yellow]\n")
 
 if __name__ == "__main__":
