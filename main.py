@@ -62,7 +62,7 @@ def check_volume_spike(df):
     avg_vol = df['volume'].tail(20).mean()
     curr_vol = df['volume'].iloc[-1]
     if curr_vol > (avg_vol * 1.5):
-        return "[bold bright_green]HIGH VOLUME SPIKE ⚡[/bold bright_green]"
+        return "[bold green]HIGH VOLUME SPIKE ⚡[/bold green]"
     return "Normal Volume"
 
 def calculate_pivot_points(df):
@@ -113,13 +113,13 @@ def show_header():
     console.clear()
     header = Panel(
         Text("🚀 CRYPTO & GOLD ALL-IN-ONE PRO DASHBOARD 🚀\n👨‍💻 DEVELOPER: BILAL ALI (SHEBI)", justify="center", style="bold cyan"),
-        style="blue"
+        style="bold blue"
     )
     console.print(header)
 
 def run_app():
     show_header()
-    coin = Prompt.ask("\n[bold yellow]📌 Symbol enter karein (e.g. BTC, ETH, PAXG)[/bold yellow]").upper().strip()
+    coin = Prompt.ask("\n[bold yellow]📌 Symbol enter karein (e.g. BTC, ETH, PAXG, ZEC)[/bold yellow]").upper().strip()
     if not coin:
         return
 
@@ -135,6 +135,7 @@ def run_app():
 
     live_price = df_1h['close'].iloc[-1]
     
+    # Indicators Calculation
     rsi = calculate_rsi(df_1h)
     rsi_sig = "[bold green]OVERSOLD 📈[/bold green]" if rsi < 30 else ("[bold red]OVERBOUGHT 📉[/bold red]" if rsi > 70 else "[bold yellow]NEUTRAL ⚖️[/bold yellow]")
     macd_val, macd_sig = calculate_macd(df_1h)
@@ -157,91 +158,136 @@ def run_app():
     is_all_bull = "BULLISH" in trend_15m and "BULLISH" in trend_1h and "BULLISH" in trend_4h
     is_all_bear = "BEARISH" in trend_15m and "BEARISH" in trend_1h and "BEARISH" in trend_4h
 
+    # Signal & Levels Prediction Logic
     if is_all_bull and macd_val > macd_sig:
-        direction = "BUY / LONG 🟢"
-        tp_val = live_price * 1.02
-        sl_val = live_price * 0.985
+        signal_text = "HIGH CONFIRMATION BUY / LONG 🚀"
+        entry_pred = live_price
+        tp_pred = live_price * 1.025
+        sl_pred = demand_zone * 0.995 if demand_zone < live_price else live_price * 0.985
     elif is_all_bear and macd_val < macd_sig:
-        direction = "SELL / SHORT 🔴"
-        tp_val = live_price * 0.98
-        sl_val = live_price * 1.015
+        signal_text = "HIGH CONFIRMATION SELL / SHORT 🚨"
+        entry_pred = live_price
+        tp_pred = live_price * 0.975
+        sl_pred = supply_zone * 1.005 if supply_zone > live_price else live_price * 1.015
     else:
-        direction = "WAIT / NO TRADE ⚠️"
-        tp_val = live_price * 1.015
-        sl_val = live_price * 0.99
+        signal_text = "WAIT / NO TRADE (Mixed Signals) ⚠️"
+        entry_pred = live_price
+        tp_pred = live_price * 1.015
+        sl_pred = live_price * 0.99
 
-    # CLEAR SIGNAL CARD (Yellow Entry, Green TP, Red SL)
-    signal_box = f"""
-[bold yellow]📍 ENTRY RATE:[/bold yellow]  [bold yellow]${live_price:,.4f}[/bold yellow]
-[bold green]🎯 TARGET (TP):[/bold green] [bold green]${tp_val:,.4f}[/bold green]
-[bold red]🛑 STOP LOSS (SL):[/bold red] [bold red]${sl_val:,.4f}[/bold red]
-[bold cyan]📊 SIGNAL DIRECTION:[/bold cyan] [bold white]{direction}[/bold white]
-"""
-    console.print(Panel(signal_box, title="[bold bright_yellow]⚡ QUICK TRADE SIGNAL SUMMARY ⚡[/bold bright_yellow]", style="magenta"))
+    # SECTION 1: COLOR-CODED PREDICTION CARDS (SEPARATE BOXES)
+    console.print("\n[bold cyan]------------------ 🎯 PREDICTION SIGNALS ------------------[/bold cyan]")
+    
+    console.print(Panel(
+        f"[bold white]PRICE:[/bold white] [bold yellow]${entry_pred:,.4f}[/bold yellow]\n[bold white]Note:[/bold white] Live Market Rate par Entry leni hai.",
+        title="[bold yellow]🟡 SAFE ENTRY PREDICTION[/bold yellow]",
+        style="yellow"
+    ))
 
-    # DETAILED INDICATOR TABLE
-    table = Table(title=f"📊 All Technical Indicators ({coin}/USDT)", style="bright_blue", header_style="bold cyan")
-    table.add_column("Indicator / Metric", style="cyan")
-    table.add_column("Value / Level", style="bold white")
+    console.print(Panel(
+        f"[bold white]TARGET RATE:[/bold white] [bold green]${tp_pred:,.4f}[/bold green]\n[bold white]Note:[/bold white] Yahan profit book karke exit karein.",
+        title="[bold green]🟢 TAKE PROFIT (TP) PREDICTION[/bold green]",
+        style="green"
+    ))
+
+    console.print(Panel(
+        f"[bold white]STOP LOSS RATE:[/bold white] [bold red]${sl_pred:,.4f}[/bold red]\n[bold white]Note:[/bold white] Trade galat jaane par yahan auto-close ho.",
+        title="[bold red]🔴 STOP LOSS (SL) PREDICTION[/bold red]",
+        style="red"
+    ))
+
+    console.print(Panel(
+        f"[bold cyan]OVERALL SIGNAL:[/bold cyan] [bold white]{signal_text}[/bold white]",
+        title="[bold blue]⚡ FINAL DIRECTION[/bold blue]",
+        style="cyan"
+    ))
+
+    # SECTION 2: ALL TECHNICAL INDICATORS TABLE (SEPARATE SECTION)
+    table = Table(title=f"📊 COMPLETE INDICATORS DASHBOARD ({coin}/USDT)", style="magenta", header_style="bold cyan")
+    table.add_column("Indicator Name", style="cyan")
+    table.add_column("Current Value / Range", style="bold white")
     table.add_column("Signal Status", style="bold yellow")
 
+    table.add_row("Live Price", f"${live_price:,.4f}", "[bold white]Live[/bold white]")
     table.add_row("RSI (14)", f"{rsi:.2f}", rsi_sig)
     table.add_row("MACD Crossover", f"Val: {macd_val:.2f} | Sig: {macd_sig:.2f}", macd_status)
-    table.add_row("Parabolic SAR", "Trend Status", sar_status)
+    table.add_row("Parabolic SAR", "Trend Direction", sar_status)
     table.add_row("Moving Averages", f"EMA20: ${ema20:,.2f} | SMA50: ${sma50:,.2f}", ma_status)
     table.add_row("Bollinger Bands", f"Upper: ${upper_bb:,.2f} | Lower: ${lower_bb:,.2f}", bb_status)
-    table.add_row("Volume Status", "20-Period Avg", vol_status)
-    table.add_row("Pivot Points", f"P: ${pivot:,.2f}", f"S1: ${s1:,.2f} | R1: ${r1:,.2f}")
-    table.add_row("Demand/Supply", f"Demand: ${demand_zone:,.2f}", f"Supply: ${supply_zone:,.2f}")
-    table.add_row("Multi-Timeframe", f"15m: {trend_15m} | 1h: {trend_1h}", f"4h: {trend_4h}")
+    table.add_row("Volume Status", "20-Bar Volume", vol_status)
+    table.add_row("Pivot Level (P)", f"${pivot:,.4f}", "Central Pivot")
+    table.add_row("Support Levels", f"S1: ${s1:,.2f} | S2: ${s2:,.2f}", "[bold green]BUY AREA[/bold green]")
+    table.add_row("Resistance Levels", f"R1: ${r1:,.2f} | R2: ${r2:,.2f}", "[bold red]SELL AREA[/bold red]")
+    table.add_row("Demand Zone (Support)", f"${demand_zone:,.4f}", "[bold green]STRONG SUPPORT[/bold green]")
+    table.add_row("Supply Zone (Resistance)", f"${supply_zone:,.4f}", "[bold red]STRONG RESISTANCE[/bold red]")
+    table.add_row("15-Min Trend", trend_15m, "Scalp Trend")
+    table.add_row("1-Hour Trend", trend_1h, "Main Trend")
+    table.add_row("4-Hour Trend", trend_4h, "Major Trend")
     table.add_row("Candle Pattern", candle_pattern, "Pattern Scanner")
 
-    console.print(table)
+    console.print("\n", table)
 
-    # INTERACTIVE POSITION CALCULATOR
-    console.print("\n[bold yellow]❓ Trade Risk & Position Calculator chalana chahte hain?[/bold yellow]")
-    calc_choice = Prompt.ask("👉 Choice ([1] Haan / [2] Nahi)", choices=["1", "2"], default="1")
+    # SECTION 3: SPOT & FUTURE TRADE CALCULATOR (PURANA SPOT BHI SHAMIL HAI)
+    console.print("\n[bold green]2️⃣ Trade Type Select Karein:[/bold green]")
+    console.print(" [1] Spot Trading 🛒")
+    console.print(" [2] Future Trading ⚡")
+    trade_type = Prompt.ask("👉 Choice (1 ya 2)", choices=["1", "2"], default="1")
 
-    if calc_choice == "1":
-        balance = float(Prompt.ask("\n[bold yellow]💵 Aapka Total Capital / Balance ($)[/bold yellow]", default="200"))
-        margin = float(Prompt.ask("[bold yellow]💰 Is trade par kitna Margin lagana chahte hain ($)[/bold yellow]", default=str(round(balance * 0.2, 2))))
-        leverage = float(Prompt.ask("[bold yellow]⚡ Leverage kitni rakhni hai (e.g. 10, 20, 50)[/bold yellow]", default="20"))
-        
-        pos_type = Prompt.ask("[bold yellow]📈 Position Type ([1] Long / [2] Short)[/bold yellow]", choices=["1", "2"], default="1")
-        is_long = pos_type == "1"
+    is_future = trade_type == "2"
+    is_long = True
+    leverage = 1.0
 
-        entry_p = float(Prompt.ask("📍 Entry Price ($)", default=str(round(live_price, 4))))
-        exit_p = float(Prompt.ask("🎯 Target Exit (TP) ($)", default=str(round(tp_val, 4))))
-        sl_p = float(Prompt.ask("🛑 Stop Loss (SL) ($)", default=str(round(sl_val, 4))))
-        pkr_rate = float(Prompt.ask("💱 USD to PKR Rate", default="278.5"))
+    if is_future:
+        pos = Prompt.ask("Position Type ([1] Long / [2] Short)", choices=["1", "2"], default="1")
+        is_long = pos == "1"
+        leverage = float(Prompt.ask("Leverage (e.g. 10, 20, 50)", default="10"))
 
-        position_size = margin * leverage
-        coins = position_size / entry_p
+    entry_price = float(Prompt.ask("Entry Rate ($)", default=str(round(entry_pred, 4))))
+    margin = float(Prompt.ask("Investment / Margin ($)", default="100"))
+    exit_price = float(Prompt.ask("Target Exit Rate ($)", default=str(round(tp_pred, 4))))
+    pkr_rate = float(Prompt.ask("USD to PKR Rate", default="278.5"))
+    sl_price = float(Prompt.ask("Stop Loss Rate ($)", default=str(round(sl_pred, 4))))
 
-        if is_long:
-            pnl_usd = (exit_p - entry_p) * coins
-            loss_usd = (entry_p - sl_p) * coins
-            liq_price = entry_p * (1 - 1 / leverage)
-        else:
-            pnl_usd = (entry_p - exit_p) * coins
-            loss_usd = (sl_p - entry_p) * coins
-            liq_price = entry_p * (1 + 1 / leverage)
+    position_size = margin * leverage
+    coins = position_size / entry_price
+    
+    if is_long or not is_future:
+        pnl_usd = (exit_price - entry_price) * coins
+        loss_usd = (entry_price - sl_price) * coins
+        liq_price = entry_price * (1 - 1 / leverage) if is_future else 0
+    else:
+        pnl_usd = (entry_price - exit_price) * coins
+        loss_usd = (sl_price - entry_price) * coins
+        liq_price = entry_price * (1 + 1 / leverage)
 
-        roe = (pnl_usd / margin) * 100
-        pnl_pkr = pnl_usd * pkr_rate
-        loss_pkr = loss_usd * pkr_rate
+    roe = (pnl_usd / margin) * 100
+    pnl_pkr = pnl_usd * pkr_rate
+    loss_pkr = loss_usd * pkr_rate
+    risk_reward = abs(pnl_usd / loss_usd) if loss_usd > 0 else 0
 
-        calc_summary = f"""
-[bold yellow]💼 Account Margin Used:[/bold yellow] [bold white]${margin:,.2f}[/bold white] (Rs. {margin * pkr_rate:,.2f})
-[bold yellow]🔍 Position Volume:[/bold yellow]     [bold white]${position_size:,.2f}[/bold white] ({coins:.4f} {coin})
-[bold yellow]⚡ Selected Leverage:[/bold yellow]   [bold white]{leverage:.0f}x[/bold white]
+    type_str = f"Future ({'LONG 📈' if is_long else 'SHORT 📉'}) | Leverage: {leverage:.1f}x" if is_future else "SPOT Buying 🛒"
+    
+    summary = f"""
+📌 Type: [bold white]{type_str}[/bold white]
+🏷️ Entry: [bold yellow]${entry_price:,.4f}[/bold yellow] | Target Exit: [bold green]${exit_price:,.4f}[/bold green]
+🛑 Stop Loss: [bold red]${sl_price:,.4f}[/bold red] (Est. Loss: -${loss_usd:.2f} / -Rs. {loss_pkr:,.2f})
 
-[bold green]🚀 EST. PROFIT (PnL):[/bold green]    [bold green]+${pnl_usd:,.2f}[/bold green] (Rs. +{pnl_pkr:,.2f}) | [bold green]ROE: +{roe:.2f}%[/bold green]
-[bold red]🛑 EST. LOSS (If SL Hits):[/bold red] [bold red]-${loss_usd:,.2f}[/bold red] (Rs. -{loss_pkr:,.2f})
-[bold red]💥 LIQUIDATION PRICE:[/bold red]    [bold red]${liq_price:,.4f}[/bold red]
+💰 Capital Investment: [bold white]${margin:,.2f}[/bold white] (Rs. {margin * pkr_rate:,.2f})
 """
-        console.print(Panel(calc_summary, title="[bold green]📊 PERSONALIZED TRADE ESTIMATION[/bold green]", style="green"))
+    if is_future:
+        summary += f"🔍 Total Position Volume: [bold white]${position_size:,.2f}[/bold white] ({coins:.4f} {coin})\n"
+    else:
+        summary += f"🪙 Coins Purchased: [bold white]{coins:.4f} {coin}[/bold white]\n"
 
+    summary += f"""
+🚀 Estimated Profit (PnL): [bold green]+${pnl_usd:.2f}[/bold green] (Rs. [bold green]+{pnl_pkr:,.2f}[/bold green])
+📊 Return on Investment (ROI): [bold green]+{roe:.2f}%[/bold green]
+⚖️ Risk to Reward Ratio: [bold cyan]1 : {risk_reward:.2f}[/bold cyan]
+"""
+    if is_future:
+        summary += f"💥 Est. Liquidation Price: [bold red]${liq_price:,.4f}[/bold red]\n"
+
+    console.print(Panel(summary, title="[bold green]📊 FINAL TRADE CALCULATION[/bold green]", style="green"))
     console.print("\n[bold yellow]👨‍💻 DEVELOPER: BILAL ALI (SHEBI)[/bold yellow]\n")
 
 if __name__ == "__main__":
