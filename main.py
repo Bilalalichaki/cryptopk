@@ -23,29 +23,55 @@ def send_telegram_alert(message: str):
         console.print("[bold red]❌ Telegram Token ya Chat ID missing hai![/bold red]")
         return
     
-    # Telegram Proxy URLs (Pakistan Block Bypass)
-    endpoints = [
+    payload = {"chat_id": TELEGRAM_CHAT_ID, "text": message, "parse_mode": "HTML"}
+    
+    # Direct Telegram API & Reverse Proxy Endpoints List
+    urls = [
         f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage",
         f"https://telegram-bot-api.vercel.app/bot{TELEGRAM_BOT_TOKEN}/sendMessage",
         f"https://api.pwrtelegram.xyz/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
     ]
     
-    payload = {"chat_id": TELEGRAM_CHAT_ID, "text": message, "parse_mode": "HTML"}
+    # Public SOCKS5 & HTTP Proxies for direct Telegram API
+    proxies_list = [
+        None,
+        {'http': 'http://185.199.229.156:7492', 'https': 'http://185.199.229.156:7492'},
+        {'http': 'socks5h://184.174.9.190:1080', 'https': 'socks5h://184.174.9.190:1080'},
+        {'http': 'socks5h://127.0.0.1:9050', 'https': 'socks5h://127.0.0.1:9050'}
+    ]
+
     success = False
 
-    for url in endpoints:
+    # Route 1: Try Reverse Proxies
+    for target_url in urls:
         try:
-            response = requests.post(url, json=payload, timeout=8)
+            response = requests.post(target_url, json=payload, timeout=6)
             res_data = response.json()
             if res_data.get("ok"):
-                console.print("[bold green]✅ Telegram Alert Sent Successfully![/bold green]")
+                console.print("[bold green]✅ Telegram Alert Sent Successfully via Proxy Bridge![/bold green]")
                 success = True
                 break
         except Exception:
             continue
 
+    # Route 2: If Bridge fails, try Direct Telegram API with SOCKS5 / HTTP Proxies
     if not success:
-        console.print("[bold red]❌ Telegram Request Failed: Internet check karein ya mobile me WARP / VPN ON karein.[/bold red]")
+        direct_url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
+        for px in proxies_list:
+            if px is None: 
+                continue
+            try:
+                response = requests.post(direct_url, json=payload, proxies=px, timeout=6)
+                res_data = response.json()
+                if res_data.get("ok"):
+                    console.print("[bold green]✅ Telegram Alert Sent Successfully via SOCKS5/HTTP Proxy![/bold green]")
+                    success = True
+                    break
+            except Exception:
+                continue
+
+    if not success:
+        console.print("[bold red]❌ Network Blocked: ISP public proxies block kar raha hai. Mobile me WARP (1.1.1.1) ON karke try karein.[/bold red]")
 
 # Start Test Message
 def send_test_message():
