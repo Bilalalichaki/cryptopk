@@ -17,7 +17,7 @@ TELEGRAM_CHAT_ID = "5846593253"
 BINANCE_API_KEY = "YOUR_BINANCE_API_KEY_HERE"
 BINANCE_SECRET_KEY = "YOUR_BINANCE_SECRET_KEY_HERE"
 
-# Telegram Alert Sender with Live Status
+# Telegram Alert Sender with Instant Error Tracking
 def send_telegram_alert(message: str):
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
         console.print("[bold red]❌ Telegram Token ya Chat ID missing hai![/bold red]")
@@ -28,11 +28,16 @@ def send_telegram_alert(message: str):
         response = requests.post(url, json=payload, timeout=5)
         res_data = response.json()
         if res_data.get("ok"):
-            console.print("[bold green]✅ Telegram Alert Sent Successfully![/bold green]")
+            console.print("[bold green]✅ Telegram Alert Sent Successfully to Bot![/bold green]")
         else:
-            console.print(f"[bold red]❌ Telegram Error: {res_data.get('description')}[/bold red]")
+            console.print(f"[bold red]❌ Telegram API Error: {res_data.get('description')}[/bold red]")
     except Exception as e:
         console.print(f"[bold red]❌ Request Failed: {e}[/bold red]")
+
+# Start Test Message
+def send_test_message():
+    console.print("[bold cyan]🔄 Testing Telegram Connection...[/bold cyan]")
+    send_telegram_alert("⚡ <b>AI Terminal Connected Successfully!</b>\n\nAapka bot active hai aur signals ke liye ready hai.")
 
 # 1. Fetch Binance Klines Data
 def get_binance_klines(symbol: str, interval="1h", limit=100):
@@ -259,26 +264,21 @@ def analyze_coin():
     trailing_sl = live_price * 0.992
 
     if bullish_score >= 4:
-        ai_decision = "[bold green]🚀 BUY ENTRY RECOMMENDED (ENTRY LENA CHAHIYE)[/bold green]"
+        ai_decision = "BUY ENTRY RECOMMENDED"
         ai_target = r1 if r1 > live_price else live_price * 1.04
         ai_sl = s1 if s1 < live_price else live_price * 0.98
         win_prob = 75 + (bullish_score * 4)
         ai_box_style = "bold green"
         ai_reason = "Major timeframes me strong bullish momentum hai. Indicators safe buying zone me hain."
-        
-        # Automatic Telegram Notification
-        msg = f"🚀 <b>AI BUY SIGNAL: {coin}/USDT</b>\n\nLive Price: ${live_price}\nTarget Rate: ${ai_target:.4f}\nStop Loss: ${ai_sl:.4f}\nWin Probability: {win_prob}%\nTrigger Rate: ${trigger_rate:.4f}"
-        send_telegram_alert(msg)
-
     elif bullish_score <= 1 or rsi > 70:
-        ai_decision = "[bold red]🛑 NO ENTRY / HIGH RISK (ENTRY NA LEIN)[/bold red]"
+        ai_decision = "NO ENTRY / HIGH RISK"
         ai_target = live_price * 0.95
         ai_sl = supply_zone * 1.01
         win_prob = 25
         ai_box_style = "bold red"
         ai_reason = "Market overbought hai ya high resistance level par hai. Dump ka risk zyada hai."
     else:
-        ai_decision = "[bold yellow]⏳ WAIT & WATCH (INTEZAR KAREIN)[/bold yellow]"
+        ai_decision = "WAIT & WATCH"
         ai_target = r1
         ai_sl = s1
         win_prob = 50
@@ -289,6 +289,10 @@ def analyze_coin():
     sl_pct = ((live_price - ai_sl) / live_price) * 100
     risk_reward = abs(target_pct / sl_pct) if sl_pct > 0 else 1.0
 
+    # AUTOMATIC TELEGRAM ALERT ON EVERY ANALYSIS
+    msg = f"📊 <b>AI SIGNAL REPORT: {coin}/USDT</b>\n\n<b>Decision:</b> {ai_decision}\n<b>Live Price:</b> ${live_price:,.4f}\n<b>Target:</b> ${ai_target:,.4f}\n<b>Stop Loss:</b> ${ai_sl:,.4f}\n<b>Win Probability:</b> {win_prob}%"
+    send_telegram_alert(msg)
+
     # ---------------------------------------------------------
     # 1. AI PREDICTION + BACKTESTING SUMMARY
     # ---------------------------------------------------------
@@ -296,7 +300,7 @@ def analyze_coin():
     console.print(Rule(title=f"[bold cyan]🤖 ADVANCED AI PREDICTION ({coin}/USDT) | Live Price: ${live_price:,.4f}[/bold cyan]", style="cyan"))
 
     ai_report = f"""
-🎯 [bold white]ENTRY DECISION:[/bold white] {ai_decision}
+🎯 [bold white]ENTRY DECISION:[/bold white] [{ai_box_style}]{ai_decision}[/{ai_box_style}]
 💡 [bold white]REASON (Wajah):[/bold white] {ai_reason}
 
 📊 [bold green]WIN PROBABILITY:[/bold green] [bold green]{win_prob}% Chance[/bold green] | [bold cyan]Risk-to-Reward Ratio:[/bold cyan] 1 : {risk_reward:.2f}
@@ -371,6 +375,9 @@ def analyze_coin():
     return choice.lower() == "y"
 
 def main():
+    show_header()
+    send_test_message()
+    Prompt.ask("\n[bold yellow]Enter dabayein continue karne ke liye...[/bold yellow]")
     running = True
     while running:
         running = analyze_coin()
