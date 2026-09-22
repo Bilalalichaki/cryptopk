@@ -62,7 +62,7 @@ def check_volume_spike(df):
     avg_vol = df['volume'].tail(20).mean()
     curr_vol = df['volume'].iloc[-1]
     if curr_vol > (avg_vol * 1.5):
-        return "[bold bright_green]HIGH VOLUME SPIKE ⚡ (BULLISH MOMENTUM)[/bold bright_green]", "green"
+        return "[bold bright_green]HIGH VOLUME SPIKE ⚡ (STRONG MOMENTUM)[/bold bright_green]", "green"
     return "[bold yellow]NORMAL VOLUME ⚖️[/bold yellow]", "yellow"
 
 def calculate_pivot_points(df):
@@ -78,13 +78,13 @@ def calculate_pivot_points(df):
 
 def get_tf_trend(df):
     if df is None or df.empty:
-        return "[bold yellow]NEUTRAL ⚖️[/bold yellow]"
+        return "NEUTRAL ⚖️"
     live_price = df['close'].iloc[-1]
     ema20 = df['close'].ewm(span=20, adjust=False).mean().iloc[-1]
     if live_price > ema20:
-        return "[bold green]BULLISH 📈[/bold green]"
+        return "BULLISH 📈"
     else:
-        return "[bold red]BEARISH 📉[/bold red]"
+        return "BEARISH 📉"
 
 def detect_candlestick_patterns(df):
     curr = df.iloc[-1]
@@ -112,7 +112,7 @@ def detect_supply_demand_zones(df):
 def show_header():
     console.clear()
     header = Panel(
-        Text("⚡ CRYPTO PURE TECHNICAL INDICATORS TERMINAL ⚡\n👨‍💻 DEVELOPER: BILAL ALI (SHEBI)", justify="center", style="bold cyan"),
+        Text("⚡ CRYPTO AI PREDICTION & TECHNICAL TERMINAL ⚡\n👨‍💻 DEVELOPER: BILAL ALI (SHEBI)", justify="center", style="bold cyan"),
         style="bold blue"
     )
     console.print(header)
@@ -143,39 +143,10 @@ def analyze_coin():
 
     # Indicator Calculations
     rsi = calculate_rsi(df_1h)
-    if rsi < 30:
-        rsi_txt = f"[bold green]RSI: {rsi:.2f} -> OVERSOLD 📈 (BUY ZONE)[/bold green]"
-        rsi_color = "green"
-    elif rsi > 70:
-        rsi_txt = f"[bold red]RSI: {rsi:.2f} -> OVERBOUGHT 📉 (SELL ZONE)[/bold red]"
-        rsi_color = "red"
-    else:
-        rsi_txt = f"[bold yellow]RSI: {rsi:.2f} -> NEUTRAL ⚖️[/bold yellow]"
-        rsi_color = "yellow"
-
     macd_val, macd_sig = calculate_macd(df_1h)
-    if macd_val > macd_sig:
-        macd_txt = f"[bold green]Val: {macd_val:.4f} | Sig: {macd_sig:.4f} -> BULLISH CROSSOVER 🟢[/bold green]"
-        macd_color = "green"
-    else:
-        macd_txt = f"[bold red]Val: {macd_val:.4f} | Sig: {macd_sig:.4f} -> BEARISH CROSSOVER 🔴[/bold red]"
-        macd_color = "red"
-
     is_uptrend = calculate_psar(df_1h)
-    psar_txt = "[bold green]UPTREND 📈 (BULLISH)[/bold green]" if is_uptrend else "[bold red]DOWNTREND 📉 (BEARISH)[/bold red]"
-    psar_color = "green" if is_uptrend else "red"
-
     ema20, sma50 = calculate_ma(df_1h)
-    if live_price > ema20 > sma50:
-        ma_txt = f"[bold green]EMA20 (${ema20:,.4f}) > SMA50 (${sma50:,.4f}) -> STRONG BULLISH 🚀[/bold green]"
-        ma_color = "green"
-    else:
-        ma_txt = f"[bold red]EMA20 (${ema20:,.4f}) < SMA50 (${sma50:,.4f}) -> WEAK / BEARISH 📉[/bold red]"
-        ma_color = "red"
-
     upper_bb, lower_bb = calculate_bollinger_bands(df_1h)
-    bb_txt = f"Upper Band: [bold red]${upper_bb:,.4f}[/bold red] | Lower Band: [bold green]${lower_bb:,.4f}[/bold green]"
-    
     vol_txt, vol_color = check_volume_spike(df_1h)
     pivot, s1, s2, r1, r2 = calculate_pivot_points(df_1h)
     demand_zone, supply_zone = detect_supply_demand_zones(df_1h)
@@ -185,62 +156,84 @@ def analyze_coin():
     trend_1h = get_tf_trend(df_1h)
     trend_4h = get_tf_trend(df_4h)
 
-    # OUTPUT SECTION - ONLY INDICATORS
+    # AI ENGINE LOGIC & PREDICTIONS
+    bullish_score = 0
+    if rsi < 65 and rsi > 30: bullish_score += 1
+    if macd_val > macd_sig: bullish_score += 1
+    if is_uptrend: bullish_score += 1
+    if live_price > ema20: bullish_score += 1
+    if "BULLISH" in trend_1h: bullish_score += 1
+
+    if bullish_score >= 4:
+        ai_decision = "[bold green]🚀 BUY ENTRY RECOMMENDED (High Bullish Momentum)[/bold green]"
+        ai_target = r1 if r1 > live_price else live_price * 1.035
+        ai_sl = s1 if s1 < live_price else live_price * 0.985
+        ai_box_style = "bold green"
+        ai_reason = "Indicator alignment strong hai. RSI aur MACD safe bullish zone me hain."
+    elif bullish_score <= 1 or rsi > 70:
+        ai_decision = "[bold red]🛑 NO ENTRY / BEARISH PRESSURE (Risk of Dump)[/bold red]"
+        ai_target = live_price * 0.96
+        ai_sl = supply_zone * 1.01
+        ai_box_style = "bold red"
+        ai_reason = "Market overbought hai ya bearish pressure dominant hai. Entry se garez karein."
+    else:
+        ai_decision = "[bold yellow]⏳ WAIT & WATCH (Market Consolidating)[/bold yellow]"
+        ai_target = r1
+        ai_sl = s1
+        ai_box_style = "bold yellow"
+        ai_reason = "Trend confirm nahi hai. Safe entry point ka wait karein."
+
+    target_pct = ((ai_target - live_price) / live_price) * 100
+    sl_pct = ((live_price - ai_sl) / live_price) * 100
+
+    # ---------------------------------------------------------
+    # SECTION 1: AI MARKET PREDICTION REPORT
+    # ---------------------------------------------------------
     console.print("\n")
-    console.print(Rule(title=f"[bold magenta]📊 ALL INDICATORS BREAKDOWN ({coin}/USDT) | Live Price: ${live_price:,.4f}[/bold magenta]", style="magenta"))
+    console.print(Rule(title=f"[bold cyan]🤖 AI PREDICTION REPORT ({coin}/USDT) | Live Rate: ${live_price:,.4f}[/bold cyan]", style="cyan"))
 
-    # 1. RSI
-    console.print(Panel(rsi_txt, title="[bold cyan]1️⃣ RSI (14) Indicator[/bold cyan]", style=rsi_color))
-    console.print(Rule(style="dim white"))
+    ai_report = f"""
+📌 [bold white]AI DECISION:[/bold white] {ai_decision}
+💡 [bold white]REASON:[/bold white] {ai_reason}
 
-    # 2. MACD
-    console.print(Panel(macd_txt, title="[bold cyan]2️⃣ MACD Indicator[/bold cyan]", style=macd_color))
-    console.print(Rule(style="dim white"))
-
-    # 3. PSAR
-    console.print(Panel(psar_txt, title="[bold cyan]3️⃣ Parabolic SAR[/bold cyan]", style=psar_color))
-    console.print(Rule(style="dim white"))
-
-    # 4. MA
-    console.print(Panel(ma_txt, title="[bold cyan]4️⃣ Moving Averages (EMA20 vs SMA50)[/bold cyan]", style=ma_color))
-    console.print(Rule(style="dim white"))
-
-    # 5. BB
-    console.print(Panel(bb_txt, title="[bold cyan]5️⃣ Bollinger Bands Range[/bold cyan]", style="blue"))
-    console.print(Rule(style="dim white"))
-
-    # 6. Volume
-    console.print(Panel(vol_txt, title="[bold cyan]6️⃣ Volume Analysis[/bold cyan]", style=vol_color))
-    console.print(Rule(style="dim white"))
-
-    # 7. Pivots
-    pivot_info = f"""
-[bold white]Pivot Point (P):[/bold white] ${pivot:,.4f}
-[bold green]Support 1 (S1):[/bold green] ${s1:,.4f}  |  [bold green]Support 2 (S2):[/bold green] ${s2:,.4f}
-[bold red]Resistance 1 (R1):[/bold red] ${r1:,.4f}  |  [bold red]Resistance 2 (R2):[/bold red] ${r2:,.4f}
+🎯 [bold green]EXPECTED TARGET (Imkan):[/bold green] [bold green]${ai_target:,.4f}[/bold green] ([bold green]{target_pct:+.2f}%[/bold green])
+🛑 [bold red]RECOMMENDED STOP LOSS:[/bold red] [bold red]${ai_sl:,.4f}[/bold red] ([bold red]-{sl_pct:.2f}%[/bold red])
+🏢 [bold magenta]KEY SUPPLY / DEMAND:[/bold magenta] Demand: ${demand_zone:,.4f} | Supply: ${supply_zone:,.4f}
 """
-    console.print(Panel(pivot_info, title="[bold cyan]7️⃣ Pivot Points & Key Levels[/bold cyan]", style="cyan"))
-    console.print(Rule(style="dim white"))
+    console.print(Panel(ai_report, title="[bold cyan]⚡ AI SYSTEM ENGINE ANALYSIS[/bold cyan]", style=ai_box_style))
 
-    # 8. Demand/Supply
-    ds_info = f"""
-[bold green]🟢 Demand Zone (Support Area):[/bold green] ${demand_zone:,.4f}
-[bold red]🔴 Supply Zone (Resistance Area):[/bold red] ${supply_zone:,.4f}
-"""
-    console.print(Panel(ds_info, title="[bold cyan]8️⃣ Demand & Supply Zones[/bold cyan]", style="magenta"))
-    console.print(Rule(style="dim white"))
-
-    # 9. MTF Trend
-    mtf_info = f"15m: {trend_15m} | 1h: {trend_1h} | 4h: {trend_4h}"
-    console.print(Panel(mtf_info, title="[bold cyan]9️⃣ Multi-Timeframe Trend[/bold cyan]", style="blue"))
-    console.print(Rule(style="dim white"))
-
-    # 10. Candle Pattern
-    console.print(Panel(candle_pattern, title="[bold cyan]🔟 Candlestick Pattern Scanner[/bold cyan]", style="white"))
-
-    # REPEAT PROMPT
+    # ---------------------------------------------------------
+    # SECTION 2: TECHNICAL INDICATORS BREAKDOWN
+    # ---------------------------------------------------------
     console.print("\n")
-    choice = Prompt.ask("[bold yellow]🔄 Kisi aur coin ka indicator dekhna hai? (Y / N)[/bold yellow]", choices=["y", "n"], default="y")
+    console.print(Rule(title=f"[bold magenta]📊 TECHNICAL INDICATORS BREAKDOWN[/bold magenta]", style="magenta"))
+
+    # RSI
+    rsi_txt = f"RSI Value: {rsi:.2f} | Status: " + ("OVERSOLD 📈" if rsi < 30 else "OVERBOUGHT 📉" if rsi > 70 else "NEUTRAL ⚖️")
+    console.print(Panel(rsi_txt, title="1️⃣ RSI (14)", style="green" if rsi < 60 else "red"))
+
+    # MACD
+    macd_txt = f"MACD Val: {macd_val:.4f} | Signal: {macd_sig:.4f} -> " + ("BULLISH CROSSOVER 🟢" if macd_val > macd_sig else "BEARISH CROSSOVER 🔴")
+    console.print(Panel(macd_txt, title="2️⃣ MACD Indicator", style="green" if macd_val > macd_sig else "red"))
+
+    # PSAR & MA
+    ma_txt = f"PSAR: {'UPTREND 📈' if is_uptrend else 'DOWNTREND 📉'} | EMA20: ${ema20:,.4f} | SMA50: ${sma50:,.4f}"
+    console.print(Panel(ma_txt, title="3️⃣ PSAR & Moving Averages", style="cyan"))
+
+    # Bollinger & Volume
+    vol_bb = f"BB Upper: ${upper_bb:,.4f} | BB Lower: ${lower_bb:,.4f}\nVolume: {vol_txt}"
+    console.print(Panel(vol_bb, title="4️⃣ Bollinger Bands & Volume", style="blue"))
+
+    # Timeframe Alignment
+    mtf_txt = f"15m: {trend_15m} | 1h: {trend_1h} | 4h: {trend_4h}"
+    console.print(Panel(mtf_txt, title="5️⃣ Multi-Timeframe Alignment", style="magenta"))
+
+    # Pattern
+    console.print(Panel(candle_pattern, title="6️⃣ Candlestick Pattern", style="white"))
+
+    # LOOP PROMPT
+    console.print("\n")
+    choice = Prompt.ask("[bold yellow]🔄 Kisi aur coin ka check karna hai? (Y / N)[/bold yellow]", choices=["y", "n"], default="y")
     return choice.lower() == "y"
 
 def main():
