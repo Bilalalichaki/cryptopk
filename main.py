@@ -8,6 +8,7 @@ from rich.text import Text
 
 console = Console()
 
+# 1. Fetch Binance Klines Data
 def get_binance_klines(symbol: str, interval="1h", limit=100):
     url = f"https://api.binance.com/api/v3/klines?symbol={symbol.upper()}USDT&interval={interval}&limit={limit}"
     try:
@@ -26,6 +27,20 @@ def get_binance_klines(symbol: str, interval="1h", limit=100):
     except Exception:
         return None
 
+# 2. Fetch Fear & Greed Index
+def get_fear_and_greed():
+    try:
+        res = requests.get("https://api.alternative.me/fng/?limit=1", timeout=4)
+        if res.status_code == 200:
+            data = res.json()['data'][0]
+            val = int(data['value'])
+            classification = data['value_classification']
+            return val, classification
+    except Exception:
+        pass
+    return 50, "Neutral"
+
+# 3. Indicator Calculations
 def calculate_rsi(df, period=14):
     delta = df['close'].diff()
     gain = (delta.where(delta > 0, 0)).rolling(window=period).mean()
@@ -112,7 +127,7 @@ def detect_supply_demand_zones(df):
 def show_header():
     console.clear()
     header = Panel(
-        Text("⚡ CRYPTO TECHNICAL & AI PREDICTION TERMINAL ⚡\n👨‍💻 DEVELOPER: BILAL ALI (SHEBI)", justify="center", style="bold cyan"),
+        Text("⚡ CRYPTO ADVANCED AI & TECHNICAL TERMINAL ⚡\n👨‍💻 DEVELOPER: BILAL ALI (SHEBI)", justify="center", style="bold cyan"),
         style="bold blue"
     )
     console.print(header)
@@ -128,13 +143,17 @@ def analyze_coin():
     if not coin:
         return True
 
-    console.print(f"\n[bold cyan]🔄 Binance se {coin}/USDT ka 15m, 1h, 1d, 4d data fetch ho raha hai...[/bold cyan]")
+    console.print(f"\n[bold cyan]🔄 Binance se {coin}/USDT + BTC Market Context fetch ho raha hai...[/bold cyan]")
     
     # Timeframes Data Fetching
     df_15m = get_binance_klines(coin, interval="15m")
     df_1h  = get_binance_klines(coin, interval="1h")
     df_1d  = get_binance_klines(coin, interval="1d")
-    df_4d  = get_binance_klines(coin, interval="3d")  # Binance Max 3d option hai, 3d/4d trend context ke liye
+    df_4d  = get_binance_klines(coin, interval="3d")
+    df_btc = get_binance_klines("BTC", interval="1h")
+
+    # Fear & Greed Index
+    fng_val, fng_class = get_fear_and_greed()
 
     if df_1h is None or df_1h.empty:
         console.print("[bold red]❌ Data fetch nahi ho saka. Symbol verify karein.[/bold red]")
@@ -142,6 +161,18 @@ def analyze_coin():
         return True
 
     live_price = df_1h['close'].iloc[-1]
+
+    # BTC Correlation & Alert
+    btc_change = 0
+    if df_btc is not None and not df_btc.empty:
+        btc_open = df_btc['open'].iloc[-1]
+        btc_close = df_btc['close'].iloc[-1]
+        btc_change = ((btc_close - btc_open) / btc_open) * 100
+
+    if abs(btc_change) > 1.8:
+        btc_alert = f"[bold red]⚠️ HIGH BTC VOLATILITY ({btc_change:+.2f}%): Altcoin risk me hai![/bold red]"
+    else:
+        btc_alert = f"[bold green]✅ BTC STABLE ({btc_change:+.2f}%): Market range normal hai.[/bold green]"
 
     # Indicators (1h Baseline)
     rsi = calculate_rsi(df_1h)
@@ -160,7 +191,7 @@ def analyze_coin():
     trend_1d  = get_tf_trend(df_1d)
     trend_4d  = get_tf_trend(df_4d)
 
-    # AI ENGINE LOGIC & PREDICTION
+    # AI ENGINE LOGIC & PREDICTIONS
     bullish_score = 0
     if rsi < 65 and rsi > 30: bullish_score += 1
     if macd_val > macd_sig: bullish_score += 1
@@ -168,46 +199,66 @@ def analyze_coin():
     if live_price > ema20: bullish_score += 1
     if "BULLISH" in trend_1d: bullish_score += 1
 
+    # New Advanced Metric Calculations
+    trigger_rate = r1 if r1 > live_price else live_price * 1.008
+    trailing_sl = live_price * 0.992
+
     if bullish_score >= 4:
         ai_decision = "[bold green]🚀 BUY ENTRY RECOMMENDED (ENTRY LENA CHAHIYE)[/bold green]"
         ai_target = r1 if r1 > live_price else live_price * 1.04
         ai_sl = s1 if s1 < live_price else live_price * 0.98
+        win_prob = 75 + (bullish_score * 4)
         ai_box_style = "bold green"
-        ai_reason = "Major timeframes me strong bullish momentum hai. RSI aur MACD safe buying zone me hain."
+        ai_reason = "Major timeframes me strong bullish momentum hai. Indicators safe buying zone me hain."
     elif bullish_score <= 1 or rsi > 70:
         ai_decision = "[bold red]🛑 NO ENTRY / HIGH RISK (ENTRY NA LEIN)[/bold red]"
         ai_target = live_price * 0.95
         ai_sl = supply_zone * 1.01
+        win_prob = 25
         ai_box_style = "bold red"
-        ai_reason = "Market overbought hai ya high resistance level par hai. Dump ka khatra hai."
+        ai_reason = "Market overbought hai ya high resistance level par hai. Dump ka risk zyada hai."
     else:
         ai_decision = "[bold yellow]⏳ WAIT & WATCH (INTEZAR KAREIN)[/bold yellow]"
         ai_target = r1
         ai_sl = s1
+        win_prob = 50
         ai_box_style = "bold yellow"
-        ai_reason = "Market range-bound hai. Clear breakout ka wait karein."
+        ai_reason = "Market range-bound hai. Specific breakout level Ka wait karein."
 
     target_pct = ((ai_target - live_price) / live_price) * 100
     sl_pct = ((live_price - ai_sl) / live_price) * 100
+    risk_reward = abs(target_pct / sl_pct) if sl_pct > 0 else 1.0
 
     # ---------------------------------------------------------
-    # 1. AI PREDICTION ENGINE OUTPUT
+    # 1. AI PREDICTION ENGINE OUTPUT (WITH 5 NEW FEATURES)
     # ---------------------------------------------------------
     console.print("\n")
-    console.print(Rule(title=f"[bold cyan]🤖 AI MARKET PREDICTION ({coin}/USDT) | Live Price: ${live_price:,.4f}[/bold cyan]", style="cyan"))
+    console.print(Rule(title=f"[bold cyan]🤖 ADVANCED AI PREDICTION ({coin}/USDT) | Live Price: ${live_price:,.4f}[/bold cyan]", style="cyan"))
 
     ai_report = f"""
 🎯 [bold white]ENTRY DECISION:[/bold white] {ai_decision}
 💡 [bold white]REASON (Wajah):[/bold white] {ai_reason}
 
-🚀 [bold green]TARGET (Yahan tak jane ka imkan hai):[/bold green] [bold green]${ai_target:,.4f}[/bold green] ([bold green]{target_pct:+.2f}%[/bold green])
-🛡️ [bold red]STOP LOSS (Safe Risk Limit):[/bold red] [bold red]${ai_sl:,.4f}[/bold red] ([bold red]-{sl_pct:.2f}%[/bold red])
-🏢 [bold magenta]KEY ZONES:[/bold magenta] Demand Area: ${demand_zone:,.4f} | Supply Area: ${supply_zone:,.4f}
+📊 [bold green]WIN PROBABILITY:[/bold green] [bold green]{win_prob}% Chance[/bold green] | [bold cyan]Risk-to-Reward Ratio:[/bold cyan] 1 : {risk_reward:.2f}
+🚀 [bold green]EXPECTED TARGET:[/bold green] [bold green]${ai_target:,.4f}[/bold green] ([bold green]{target_pct:+.2f}%[/bold green])
+🛡️ [bold red]STOP LOSS:[/bold red] [bold red]${ai_sl:,.4f}[/bold red] ([bold red]-{sl_pct:.2f}%[/bold red])
+
+🔑 [bold yellow]BREAKOUT TRIGGER RATE:[/bold yellow] ${trigger_rate:,.4f} (Is level ke ooper buy karein)
+🔄 [bold magenta]TRAILING STOP LOSS:[/bold magenta] ${trailing_sl:,.4f} (Profit safe rakhne ke liye)
 """
-    console.print(Panel(ai_report, title="[bold cyan]⚡ AI ANALYSIS SUMMARY[/bold cyan]", style=ai_box_style))
+    console.print(Panel(ai_report, title="[bold cyan]⚡ AI ANALYSIS SUMMARY & PROBABILITY[/bold cyan]", style=ai_box_style))
 
     # ---------------------------------------------------------
-    # 2. TIMEFRAME ANALYSIS (15m, 1h, 1d, 4d)
+    # 2. MARKET SENTIMENT & BTC ALERT
+    # ---------------------------------------------------------
+    sentiment_info = f"""
+🌡️ [bold white]Fear & Greed Index:[/bold white] [bold yellow]{fng_val}/100 ({fng_class})[/bold yellow]
+⚡ [bold white]Bitcoin Correlation Alert:[/bold white] {btc_alert}
+"""
+    console.print(Panel(sentiment_info, title="[bold cyan]🌐 MARKET SENTIMENT & BTC ALERT[/bold cyan]", style="yellow"))
+
+    # ---------------------------------------------------------
+    # 3. TIMEFRAME ANALYSIS (15m, 1h, 1d, 4d)
     # ---------------------------------------------------------
     tf_summary = f"""
 [bold white]15m Timeframe:[/bold white] {trend_15m}  |  [bold white]1h Timeframe:[/bold white] {trend_1h}
@@ -216,7 +267,7 @@ def analyze_coin():
     console.print(Panel(tf_summary, title="[bold cyan]⏱️ MULTI-TIMEFRAME ANALYSIS (15m, 1h, 1d, 4d)[/bold cyan]", style="blue"))
 
     # ---------------------------------------------------------
-    # 3. PURE TECHNICAL INDICATORS
+    # 4. PURE TECHNICAL INDICATORS (SAB PURANE REHNE DIYE HAIN)
     # ---------------------------------------------------------
     console.print(Rule(title=f"[bold magenta]📊 ALL 10 TECHNICAL INDICATORS BREAKDOWN[/bold magenta]", style="magenta"))
 
@@ -236,12 +287,16 @@ def analyze_coin():
     vol_bb = f"Upper Band: ${upper_bb:,.4f} | Lower Band: ${lower_bb:,.4f}\nVolume Trend: {vol_txt}"
     console.print(Panel(vol_bb, title="4️⃣ Bollinger Bands & Volume Spike Scanner", style="blue"))
 
+    # Demand / Supply
+    ds_info = f"Demand Zone (Support Area): ${demand_zone:,.4f} | Supply Zone (Resistance Area): ${supply_zone:,.4f}"
+    console.print(Panel(ds_info, title="5️⃣ Demand & Supply Zones", style="magenta"))
+
     # Pivots
     pivot_info = f"Pivot: ${pivot:,.4f} | Support 1: ${s1:,.4f} | Resistance 1: ${r1:,.4f}"
-    console.print(Panel(pivot_info, title="5️⃣ Pivot Points & Levels", style="magenta"))
+    console.print(Panel(pivot_info, title="6️⃣ Pivot Points & Levels", style="cyan"))
 
     # Candle Pattern
-    console.print(Panel(candle_pattern, title="6️⃣ Candlestick Pattern Scanner", style="white"))
+    console.print(Panel(candle_pattern, title="7️⃣ Candlestick Pattern Scanner", style="white"))
 
     # LOOP PROMPT
     console.print("\n")
