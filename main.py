@@ -17,16 +17,22 @@ TELEGRAM_CHAT_ID = "5846593253"
 BINANCE_API_KEY = "YOUR_BINANCE_API_KEY_HERE"
 BINANCE_SECRET_KEY = "YOUR_BINANCE_SECRET_KEY_HERE"
 
-# Telegram Alert Sender
+# Telegram Alert Sender with Live Status
 def send_telegram_alert(message: str):
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
+        console.print("[bold red]❌ Telegram Token ya Chat ID missing hai![/bold red]")
         return
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
     payload = {"chat_id": TELEGRAM_CHAT_ID, "text": message, "parse_mode": "HTML"}
     try:
-        requests.post(url, json=payload, timeout=3)
-    except Exception:
-        pass
+        response = requests.post(url, json=payload, timeout=5)
+        res_data = response.json()
+        if res_data.get("ok"):
+            console.print("[bold green]✅ Telegram Alert Sent Successfully![/bold green]")
+        else:
+            console.print(f"[bold red]❌ Telegram Error: {res_data.get('description')}[/bold red]")
+    except Exception as e:
+        console.print(f"[bold red]❌ Request Failed: {e}[/bold red]")
 
 # 1. Fetch Binance Klines Data
 def get_binance_klines(symbol: str, interval="1h", limit=100):
