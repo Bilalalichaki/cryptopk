@@ -25,14 +25,12 @@ def send_telegram_alert(message: str):
     
     payload = {"chat_id": TELEGRAM_CHAT_ID, "text": message, "parse_mode": "HTML"}
     
-    # Direct Telegram API & Reverse Proxy Endpoints List
     urls = [
         f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage",
         f"https://telegram-bot-api.vercel.app/bot{TELEGRAM_BOT_TOKEN}/sendMessage",
         f"https://api.pwrtelegram.xyz/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
     ]
     
-    # Public SOCKS5 & HTTP Proxies for direct Telegram API
     proxies_list = [
         None,
         {'http': 'http://185.199.229.156:7492', 'https': 'http://185.199.229.156:7492'},
@@ -42,19 +40,17 @@ def send_telegram_alert(message: str):
 
     success = False
 
-    # Route 1: Try Reverse Proxies
     for target_url in urls:
         try:
             response = requests.post(target_url, json=payload, timeout=6)
             res_data = response.json()
             if res_data.get("ok"):
-                console.print("[bold green]✅ Telegram Alert Sent Successfully via Proxy Bridge![/bold green]")
+                console.print("[bold green]✅ Professional Telegram Signal Sent![/bold green]")
                 success = True
                 break
         except Exception:
             continue
 
-    # Route 2: If Bridge fails, try Direct Telegram API with SOCKS5 / HTTP Proxies
     if not success:
         direct_url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
         for px in proxies_list:
@@ -64,19 +60,14 @@ def send_telegram_alert(message: str):
                 response = requests.post(direct_url, json=payload, proxies=px, timeout=6)
                 res_data = response.json()
                 if res_data.get("ok"):
-                    console.print("[bold green]✅ Telegram Alert Sent Successfully via SOCKS5/HTTP Proxy![/bold green]")
+                    console.print("[bold green]✅ Professional Telegram Signal Sent via Proxy![/bold green]")
                     success = True
                     break
             except Exception:
                 continue
 
     if not success:
-        console.print("[bold red]❌ Network Blocked: ISP public proxies block kar raha hai. Mobile me WARP (1.1.1.1) ON karke try karein.[/bold red]")
-
-# Start Test Message
-def send_test_message():
-    console.print("[bold cyan]🔄 Testing Telegram Connection...[/bold cyan]")
-    send_telegram_alert("⚡ <b>AI Terminal Connected Successfully!</b>\n\nAapka bot active hai aur signals ke liye ready hai.")
+        console.print("[bold red]❌ Network Blocked: ISP public proxies block kar raha hai. Mobile me WARP (1.1.1.1) ON rakhein.[/bold red]")
 
 # 1. Fetch Binance Klines Data
 def get_binance_klines(symbol: str, interval="1h", limit=100):
@@ -167,9 +158,9 @@ def get_tf_trend(df):
     live_price = df['close'].iloc[-1]
     ema20 = df['close'].ewm(span=20, adjust=False).mean().iloc[-1]
     if live_price > ema20:
-        return "[bold green]BULLISH 📈[/bold green]"
+        return "BULLISH 📈"
     else:
-        return "[bold red]BEARISH 📉[/bold red]"
+        return "BEARISH 📉"
 
 def detect_candlestick_patterns(df):
     curr = df.iloc[-1]
@@ -181,14 +172,14 @@ def detect_candlestick_patterns(df):
     upper_wick = c_high - max(c_open, c_close)
 
     if p_close < p_open and c_close > c_open and c_close > p_open and c_open < p_close:
-        return "[bold green]BULLISH ENGULFING 🚀 (BUY PATTERN)[/bold green]"
+        return "BULLISH ENGULFING 🚀"
     if p_close > p_open and c_close < c_open and c_close < p_open and c_open > p_close:
-        return "[bold red]BEARISH ENGULFING 🔻 (SELL PATTERN)[/bold red]"
+        return "BEARISH ENGULFING 🔻"
     if lower_wick > (2 * body) and upper_wick < body:
-        return "[bold green]BULLISH HAMMER 🔨 (BUY PATTERN)[/bold green]"
+        return "BULLISH HAMMER 🔨"
     if upper_wick > (2 * body) and lower_wick < body:
-        return "[bold red]SHOOTING STAR 💫 (SELL PATTERN)[/bold red]"
-    return "[bold yellow]NORMAL CANDLE ⚖️[/bold yellow]"
+        return "SHOOTING STAR 💫"
+    return "NORMAL PATTERN ⚖️"
 
 def detect_supply_demand_zones(df):
     recent_df = df.tail(30)
@@ -212,7 +203,7 @@ def run_backtest(df):
         if c_rsi < 60 and m_val > m_sig and c_price > c_ema20:
             total_signals += 1
             future_prices = df['high'].iloc[i:i+5]
-            target = c_price * 1.02  # 2% Target
+            target = c_price * 1.02
             if (future_prices >= target).any():
                 wins += 1
 
@@ -224,7 +215,7 @@ def run_backtest(df):
 def show_header():
     console.clear()
     header = Panel(
-        Text("⚡ CRYPTO ADVANCED AI TERMINAL + TELEGRAM ALERTS ⚡\n👨‍💻 DEVELOPER: BILAL ALI (SHEBI)", justify="center", style="bold cyan"),
+        Text("⚡ CRYPTO ADVANCED AI TERMINAL + VIP TELEGRAM ALERTS ⚡\n👨‍💻 DEVELOPER: BILAL ALI (SHEBI)", justify="center", style="bold cyan"),
         style="bold blue"
     )
     console.print(header)
@@ -249,7 +240,6 @@ def analyze_coin():
     df_4d  = get_binance_klines(coin, interval="3d")
     df_btc = get_binance_klines("BTC", interval="1h")
 
-    # Fear & Greed Index
     fng_val, fng_class = get_fear_and_greed()
 
     if df_1h is None or df_1h.empty:
@@ -258,18 +248,6 @@ def analyze_coin():
         return True
 
     live_price = df_1h['close'].iloc[-1]
-
-    # BTC Correlation & Alert
-    btc_change = 0
-    if df_btc is not None and not df_btc.empty:
-        btc_open = df_btc['open'].iloc[-1]
-        btc_close = df_btc['close'].iloc[-1]
-        btc_change = ((btc_close - btc_open) / btc_open) * 100
-
-    if abs(btc_change) > 1.8:
-        btc_alert = f"[bold red]⚠️ HIGH BTC VOLATILITY ({btc_change:+.2f}%): Altcoin risk me hai![/bold red]"
-    else:
-        btc_alert = f"[bold green]✅ BTC STABLE ({btc_change:+.2f}%): Market range normal hai.[/bold green]"
 
     # Indicators (1h Baseline)
     rsi = calculate_rsi(df_1h)
@@ -286,7 +264,6 @@ def analyze_coin():
     trend_15m = get_tf_trend(df_15m)
     trend_1h  = get_tf_trend(df_1h)
     trend_1d  = get_tf_trend(df_1d)
-    trend_4d  = get_tf_trend(df_4d)
 
     # Backtesting Result
     bt_ratio, bt_rate = run_backtest(df_1h)
@@ -299,38 +276,65 @@ def analyze_coin():
     if live_price > ema20: bullish_score += 1
     if "BULLISH" in trend_1d: bullish_score += 1
 
-    trigger_rate = r1 if r1 > live_price else live_price * 1.008
-    trailing_sl = live_price * 0.992
-
-    if bullish_score >= 4:
-        ai_decision = "BUY ENTRY RECOMMENDED"
-        ai_target = r1 if r1 > live_price else live_price * 1.04
-        ai_sl = s1 if s1 < live_price else live_price * 0.98
+    if bullish_score >= 3:
+        signal_type = "LONG 🟢 (BUY)"
+        entry_low = live_price * 0.997
+        entry_high = live_price * 1.002
+        tp1 = live_price * 1.015
+        tp2 = live_price * 1.030
+        tp3 = live_price * 1.050
+        sl1 = live_price * 0.985
+        sl2 = live_price * 0.970
         win_prob = 75 + (bullish_score * 4)
+        ai_decision = "BUY ENTRY RECOMMENDED"
+        ai_reason = "Strong bullish momentum across indicators. Good risk-reward spot."
         ai_box_style = "bold green"
-        ai_reason = "Major timeframes me strong bullish momentum hai. Indicators safe buying zone me hain."
-    elif bullish_score <= 1 or rsi > 70:
-        ai_decision = "NO ENTRY / HIGH RISK"
-        ai_target = live_price * 0.95
-        ai_sl = supply_zone * 1.01
-        win_prob = 25
-        ai_box_style = "bold red"
-        ai_reason = "Market overbought hai ya high resistance level par hai. Dump ka risk zyada hai."
     else:
-        ai_decision = "WAIT & WATCH"
-        ai_target = r1
-        ai_sl = s1
-        win_prob = 50
+        signal_type = "SHORT 🔴 (SELL / WAIT)"
+        entry_low = live_price * 0.998
+        entry_high = live_price * 1.003
+        tp1 = live_price * 0.985
+        tp2 = live_price * 0.970
+        tp3 = live_price * 0.950
+        sl1 = live_price * 1.015
+        sl2 = live_price * 1.030
+        win_prob = 40
+        ai_decision = "WAIT / HIGH RISK ZONE"
+        ai_reason = "Market neutral ya resistance par hai. Immediate long safe nahi hai."
         ai_box_style = "bold yellow"
-        ai_reason = "Market range-bound hai. Specific breakout level Ka wait karein."
 
-    target_pct = ((ai_target - live_price) / live_price) * 100
-    sl_pct = ((live_price - ai_sl) / live_price) * 100
-    risk_reward = abs(target_pct / sl_pct) if sl_pct > 0 else 1.0
+    # PROFESSIONAL VIP TELEGRAM SIGNAL FORMAT
+    telegram_msg = f"""🔥 <b>VIP AI TRADING SIGNAL</b> 🔥
+----------------------------------
+📌 <b>PAIR:</b> #{coin}/USDT
+📈 <b>DIRECTION:</b> {signal_type}
+⚡ <b>LEVERAGE:</b> Cross 5x - 10x
 
-    # AUTOMATIC TELEGRAM ALERT ON EVERY ANALYSIS
-    msg = f"📊 <b>AI SIGNAL REPORT: {coin}/USDT</b>\n\n<b>Decision:</b> {ai_decision}\n<b>Live Price:</b> ${live_price:,.4f}\n<b>Target:</b> ${ai_target:,.4f}\n<b>Stop Loss:</b> ${ai_sl:,.4f}\n<b>Win Probability:</b> {win_prob}%"
-    send_telegram_alert(msg)
+🎯 <b>ENTRY ZONE:</b> ${entry_low:,.4f} - ${entry_high:,.4f}
+📍 <b>CURRENT PRICE:</b> ${live_price:,.4f}
+
+🎯 <b>TARGET OBJECTIVES:</b>
+ ├ <b>TP 1:</b> ${tp1:,.4f} (Scalp)
+ ├ <b>TP 2:</b> ${tp2:,.4f} (Main Target)
+ └ <b>TP 3:</b> ${tp3:,.4f} (Extended)
+
+🛡️ <b>STOP LOSS LEVELS:</b>
+ ├ <b>SL 1 (Tight):</b> ${sl1:,.4f}
+ └ <b>SL 2 (Safe):</b> ${sl2:,.4f}
+
+----------------------------------
+🧠 <b>AI CONFLUENCE & INDICATORS:</b>
+• <b>Win Probability:</b> {win_prob}%
+• <b>RSI (14):</b> {rsi:.1f}
+• <b>MACD Status:</b> {'Bullish Crossover 🟢' if macd_val > macd_sig else 'Bearish Crossover 🔴'}
+• <b>Trend (15m/1h/1d):</b> {trend_15m} | {trend_1h} | {trend_1d}
+• <b>Pattern:</b> {candle_pattern}
+• <b>Market Sentiment:</b> {fng_val}/100 ({fng_class})
+• <b>Backtest Winrate:</b> {bt_rate:.1f}% ({bt_ratio})
+
+⚠️ <i>Always use 2-3% risk management per trade!</i>"""
+
+    send_telegram_alert(telegram_msg)
 
     # 1. AI PREDICTION + BACKTESTING SUMMARY
     console.print("\n")
@@ -338,59 +342,14 @@ def analyze_coin():
 
     ai_report = f"""
 🎯 [bold white]ENTRY DECISION:[/bold white] [{ai_box_style}]{ai_decision}[/{ai_box_style}]
-💡 [bold white]REASON (Wajah):[/bold white] {ai_reason}
+💡 [bold white]REASON:[/bold white] {ai_reason}
 
-📊 [bold green]WIN PROBABILITY:[/bold green] [bold green]{win_prob}% Chance[/bold green] | [bold cyan]Risk-to-Reward Ratio:[/bold cyan] 1 : {risk_reward:.2f}
-📈 [bold magenta]BACKTEST ACCURACY (Past 50 Candles):[/bold magenta] [bold yellow]{bt_rate:.1f}% Win Rate ({bt_ratio})[/bold yellow]
-🚀 [bold green]EXPECTED TARGET:[/bold green] [bold green]${ai_target:,.4f}[/bold green] ([bold green]{target_pct:+.2f}%[/bold green])
-🛡️ [bold red]STOP LOSS:[/bold red] [bold red]${ai_sl:,.4f}[/bold red] ([bold red]-{sl_pct:.2f}%[/bold red])
-
-🔑 [bold yellow]BREAKOUT TRIGGER RATE:[/bold yellow] ${trigger_rate:,.4f} (Is level ke ooper buy karein)
-🔄 [bold magenta]TRAILING STOP LOSS:[/bold magenta] ${trailing_sl:,.4f} (Profit safe rakhne ke liye)
+📊 [bold green]WIN PROBABILITY:[/bold green] [bold green]{win_prob}% Chance[/bold green]
+📈 [bold magenta]BACKTEST ACCURACY:[/bold magenta] [bold yellow]{bt_rate:.1f}% Win Rate ({bt_ratio})[/bold yellow]
+🎯 [bold green]TARGETS:[/bold green] TP1: ${tp1:,.4f} | TP2: ${tp2:,.4f} | TP3: ${tp3:,.4f}
+🛡️ [bold red]STOP LOSS:[/bold red] SL1: ${sl1:,.4f} | SL2: ${sl2:,.4f}
 """
-    console.print(Panel(ai_report, title="[bold cyan]⚡ AI ANALYSIS SUMMARY & BACKTEST[/bold cyan]", style=ai_box_style))
-
-    # 2. MARKET SENTIMENT & BTC ALERT
-    sentiment_info = f"""
-🌡️ [bold white]Fear & Greed Index:[/bold white] [bold yellow]{fng_val}/100 ({fng_class})[/bold yellow]
-⚡ [bold white]Bitcoin Correlation Alert:[/bold white] {btc_alert}
-"""
-    console.print(Panel(sentiment_info, title="[bold cyan]🌐 MARKET SENTIMENT & BTC ALERT[/bold cyan]", style="yellow"))
-
-    # 3. TIMEFRAME ANALYSIS (15m, 1h, 1d, 4d)
-    tf_summary = f"""
-[bold white]15m Timeframe:[/bold white] {trend_15m}  |  [bold white]1h Timeframe:[/bold white] {trend_1h}
-[bold white]1d Timeframe:[/bold white] {trend_1d}  |  [bold white]4d Timeframe:[/bold white] {trend_4d}
-"""
-    console.print(Panel(tf_summary, title="[bold cyan]⏱️ MULTI-TIMEFRAME ANALYSIS (15m, 1h, 1d, 4d)[/bold cyan]", style="blue"))
-
-    # 4. PURE TECHNICAL INDICATORS
-    console.print(Rule(title=f"[bold magenta]📊 ALL 10 TECHNICAL INDICATORS BREAKDOWN[/bold magenta]", style="magenta"))
-
-    rsi_txt = f"Value: {rsi:.2f} -> " + ("OVERSOLD 📈 (BUY)" if rsi < 30 else "OVERBOUGHT 📉 (SELL)" if rsi > 70 else "NEUTRAL ⚖️")
-    console.print(Panel(rsi_txt, title="1️⃣ RSI (14) Indicator", style="green" if rsi < 60 else "red"))
-
-    macd_txt = f"MACD: {macd_val:.4f} | Signal: {macd_sig:.4f} -> " + ("BULLISH CROSSOVER 🟢" if macd_val > macd_sig else "BEARISH CROSSOVER 🔴")
-    console.print(Panel(macd_txt, title="2️⃣ MACD Indicator", style="green" if macd_val > macd_sig else "red"))
-
-    ma_txt = f"PSAR Status: {'UPTREND 📈' if is_uptrend else 'DOWNTREND 📉'}\nEMA20: ${ema20:,.4f} | SMA50: ${sma50:,.4f}"
-    console.print(Panel(ma_txt, title="3️⃣ PSAR & Moving Averages (EMA20 vs SMA50)", style="cyan"))
-
-    vol_bb = f"Upper Band: ${upper_bb:,.4f} | Lower Band: ${lower_bb:,.4f}\nVolume Trend: {vol_txt}"
-    console.print(Panel(vol_bb, title="4️⃣ Bollinger Bands & Volume Spike Scanner", style="blue"))
-
-    ds_info = f"Demand Zone (Support Area): ${demand_zone:,.4f} | Supply Zone (Resistance Area): ${supply_zone:,.4f}"
-    console.print(Panel(ds_info, title="5️⃣ Demand & Supply Zones", style="magenta"))
-
-    pivot_info = f"Pivot: ${pivot:,.4f} | Support 1: ${s1:,.4f} | Resistance 1: ${r1:,.4f}"
-    console.print(Panel(pivot_info, title="6️⃣ Pivot Points & Levels", style="cyan"))
-
-    console.print(Panel(candle_pattern, title="7️⃣ Candlestick Pattern Scanner", style="white"))
-
-    if "BUY ENTRY RECOMMENDED" in ai_decision:
-        trade_choice = Prompt.ask("\n[bold green]⚡ Direct Binance Par Order Execute Karein? (Y / N)[/bold green]", choices=["y", "n"], default="n")
-        if trade_choice.lower() == 'y':
-            console.print("[bold green]✅ Trade Execution Command Sent to Binance API![/bold green]")
+    console.print(Panel(ai_report, title="[bold cyan]⚡ AI ANALYSIS SUMMARY[/bold cyan]", style=ai_box_style))
 
     console.print("\n")
     choice = Prompt.ask("[bold yellow]🔄 Kisi aur coin ka analysis karna hai? (Y / N)[/bold yellow]", choices=["y", "n"], default="y")
@@ -398,8 +357,7 @@ def analyze_coin():
 
 def main():
     show_header()
-    send_test_message()
-    Prompt.ask("\n[bold yellow]Enter dabayein continue karne ke liye...[/bold yellow]")
+    # Startup test message has been removed as requested.
     running = True
     while running:
         running = analyze_coin()
