@@ -17,22 +17,35 @@ TELEGRAM_CHAT_ID = "5846593253"
 BINANCE_API_KEY = "YOUR_BINANCE_API_KEY_HERE"
 BINANCE_SECRET_KEY = "YOUR_BINANCE_SECRET_KEY_HERE"
 
-# Telegram Alert Sender with Instant Error Tracking
+# Telegram Alert Sender with Auto Proxy Fallback (Pakistan ISP Bypass)
 def send_telegram_alert(message: str):
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
         console.print("[bold red]❌ Telegram Token ya Chat ID missing hai![/bold red]")
         return
-    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
+    
+    # Telegram Proxy URLs (Pakistan Block Bypass)
+    endpoints = [
+        f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage",
+        f"https://telegram-bot-api.vercel.app/bot{TELEGRAM_BOT_TOKEN}/sendMessage",
+        f"https://api.pwrtelegram.xyz/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
+    ]
+    
     payload = {"chat_id": TELEGRAM_CHAT_ID, "text": message, "parse_mode": "HTML"}
-    try:
-        response = requests.post(url, json=payload, timeout=5)
-        res_data = response.json()
-        if res_data.get("ok"):
-            console.print("[bold green]✅ Telegram Alert Sent Successfully to Bot![/bold green]")
-        else:
-            console.print(f"[bold red]❌ Telegram API Error: {res_data.get('description')}[/bold red]")
-    except Exception as e:
-        console.print(f"[bold red]❌ Request Failed: {e}[/bold red]")
+    success = False
+
+    for url in endpoints:
+        try:
+            response = requests.post(url, json=payload, timeout=8)
+            res_data = response.json()
+            if res_data.get("ok"):
+                console.print("[bold green]✅ Telegram Alert Sent Successfully![/bold green]")
+                success = True
+                break
+        except Exception:
+            continue
+
+    if not success:
+        console.print("[bold red]❌ Telegram Request Failed: Internet check karein ya mobile me WARP / VPN ON karein.[/bold red]")
 
 # Start Test Message
 def send_test_message():
@@ -293,9 +306,7 @@ def analyze_coin():
     msg = f"📊 <b>AI SIGNAL REPORT: {coin}/USDT</b>\n\n<b>Decision:</b> {ai_decision}\n<b>Live Price:</b> ${live_price:,.4f}\n<b>Target:</b> ${ai_target:,.4f}\n<b>Stop Loss:</b> ${ai_sl:,.4f}\n<b>Win Probability:</b> {win_prob}%"
     send_telegram_alert(msg)
 
-    # ---------------------------------------------------------
     # 1. AI PREDICTION + BACKTESTING SUMMARY
-    # ---------------------------------------------------------
     console.print("\n")
     console.print(Rule(title=f"[bold cyan]🤖 ADVANCED AI PREDICTION ({coin}/USDT) | Live Price: ${live_price:,.4f}[/bold cyan]", style="cyan"))
 
@@ -313,63 +324,48 @@ def analyze_coin():
 """
     console.print(Panel(ai_report, title="[bold cyan]⚡ AI ANALYSIS SUMMARY & BACKTEST[/bold cyan]", style=ai_box_style))
 
-    # ---------------------------------------------------------
     # 2. MARKET SENTIMENT & BTC ALERT
-    # ---------------------------------------------------------
     sentiment_info = f"""
 🌡️ [bold white]Fear & Greed Index:[/bold white] [bold yellow]{fng_val}/100 ({fng_class})[/bold yellow]
 ⚡ [bold white]Bitcoin Correlation Alert:[/bold white] {btc_alert}
 """
     console.print(Panel(sentiment_info, title="[bold cyan]🌐 MARKET SENTIMENT & BTC ALERT[/bold cyan]", style="yellow"))
 
-    # ---------------------------------------------------------
     # 3. TIMEFRAME ANALYSIS (15m, 1h, 1d, 4d)
-    # ---------------------------------------------------------
     tf_summary = f"""
 [bold white]15m Timeframe:[/bold white] {trend_15m}  |  [bold white]1h Timeframe:[/bold white] {trend_1h}
 [bold white]1d Timeframe:[/bold white] {trend_1d}  |  [bold white]4d Timeframe:[/bold white] {trend_4d}
 """
     console.print(Panel(tf_summary, title="[bold cyan]⏱️ MULTI-TIMEFRAME ANALYSIS (15m, 1h, 1d, 4d)[/bold cyan]", style="blue"))
 
-    # ---------------------------------------------------------
     # 4. PURE TECHNICAL INDICATORS
-    # ---------------------------------------------------------
     console.print(Rule(title=f"[bold magenta]📊 ALL 10 TECHNICAL INDICATORS BREAKDOWN[/bold magenta]", style="magenta"))
 
-    # RSI
     rsi_txt = f"Value: {rsi:.2f} -> " + ("OVERSOLD 📈 (BUY)" if rsi < 30 else "OVERBOUGHT 📉 (SELL)" if rsi > 70 else "NEUTRAL ⚖️")
     console.print(Panel(rsi_txt, title="1️⃣ RSI (14) Indicator", style="green" if rsi < 60 else "red"))
 
-    # MACD
     macd_txt = f"MACD: {macd_val:.4f} | Signal: {macd_sig:.4f} -> " + ("BULLISH CROSSOVER 🟢" if macd_val > macd_sig else "BEARISH CROSSOVER 🔴")
     console.print(Panel(macd_txt, title="2️⃣ MACD Indicator", style="green" if macd_val > macd_sig else "red"))
 
-    # PSAR & Moving Averages
     ma_txt = f"PSAR Status: {'UPTREND 📈' if is_uptrend else 'DOWNTREND 📉'}\nEMA20: ${ema20:,.4f} | SMA50: ${sma50:,.4f}"
     console.print(Panel(ma_txt, title="3️⃣ PSAR & Moving Averages (EMA20 vs SMA50)", style="cyan"))
 
-    # Bollinger Bands & Volume
     vol_bb = f"Upper Band: ${upper_bb:,.4f} | Lower Band: ${lower_bb:,.4f}\nVolume Trend: {vol_txt}"
     console.print(Panel(vol_bb, title="4️⃣ Bollinger Bands & Volume Spike Scanner", style="blue"))
 
-    # Demand / Supply
     ds_info = f"Demand Zone (Support Area): ${demand_zone:,.4f} | Supply Zone (Resistance Area): ${supply_zone:,.4f}"
     console.print(Panel(ds_info, title="5️⃣ Demand & Supply Zones", style="magenta"))
 
-    # Pivots
     pivot_info = f"Pivot: ${pivot:,.4f} | Support 1: ${s1:,.4f} | Resistance 1: ${r1:,.4f}"
     console.print(Panel(pivot_info, title="6️⃣ Pivot Points & Levels", style="cyan"))
 
-    # Candle Pattern
     console.print(Panel(candle_pattern, title="7️⃣ Candlestick Pattern Scanner", style="white"))
 
-    # AUTO TRADE PROMPT (IF BUY RECOMMENDED)
     if "BUY ENTRY RECOMMENDED" in ai_decision:
         trade_choice = Prompt.ask("\n[bold green]⚡ Direct Binance Par Order Execute Karein? (Y / N)[/bold green]", choices=["y", "n"], default="n")
         if trade_choice.lower() == 'y':
             console.print("[bold green]✅ Trade Execution Command Sent to Binance API![/bold green]")
 
-    # LOOP PROMPT
     console.print("\n")
     choice = Prompt.ask("[bold yellow]🔄 Kisi aur coin ka analysis karna hai? (Y / N)[/bold yellow]", choices=["y", "n"], default="y")
     return choice.lower() == "y"
