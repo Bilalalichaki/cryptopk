@@ -45,7 +45,7 @@ def send_telegram_alert(message: str):
             response = requests.post(target_url, json=payload, timeout=6)
             res_data = response.json()
             if res_data.get("ok"):
-                console.print("[bold green]✅ Professional Telegram Signal Sent![/bold green]")
+                console.print("[bold green]✅ Telegram Signal Sent Successfully![/bold green]")
                 success = True
                 break
         except Exception:
@@ -60,7 +60,7 @@ def send_telegram_alert(message: str):
                 response = requests.post(direct_url, json=payload, proxies=px, timeout=6)
                 res_data = response.json()
                 if res_data.get("ok"):
-                    console.print("[bold green]✅ Professional Telegram Signal Sent via Proxy![/bold green]")
+                    console.print("[bold green]✅ Telegram Signal Sent via Proxy![/bold green]")
                     success = True
                     break
             except Exception:
@@ -215,7 +215,7 @@ def run_backtest(df):
 def show_header():
     console.clear()
     header = Panel(
-        Text("⚡ CRYPTO ADVANCED AI TERMINAL + VIP TELEGRAM ALERTS ⚡\n👨‍💻 DEVELOPER: BILAL ALI (SHEBI)", justify="center", style="bold cyan"),
+        Text("⚡ Cryptopk Signal (SHeBi) - ADVANCED AI TERMINAL ⚡\n👨‍💻 DEVELOPER: BILAL ALI (SHEBI)", justify="center", style="bold cyan"),
         style="bold blue"
     )
     console.print(header)
@@ -238,7 +238,6 @@ def analyze_coin():
     df_1h  = get_binance_klines(coin, interval="1h")
     df_1d  = get_binance_klines(coin, interval="1d")
     df_4d  = get_binance_klines(coin, interval="3d")
-    df_btc = get_binance_klines("BTC", interval="1h")
 
     fng_val, fng_class = get_fear_and_greed()
 
@@ -276,69 +275,96 @@ def analyze_coin():
     if live_price > ema20: bullish_score += 1
     if "BULLISH" in trend_1d: bullish_score += 1
 
+    # FUTURES LONG & SHORT CALCULATION
+    f_long_entry_low = live_price * 0.997
+    f_long_entry_high = live_price * 1.002
+    f_long_tp1 = live_price * 1.015
+    f_long_tp2 = live_price * 1.030
+    f_long_tp3 = live_price * 1.050
+    f_long_sl = live_price * 0.982
+
+    f_short_entry_low = live_price * 1.003
+    f_short_entry_high = live_price * 0.998
+    f_short_tp1 = live_price * 0.985
+    f_short_tp2 = live_price * 0.970
+    f_short_tp3 = live_price * 0.950
+    f_short_sl = live_price * 1.018
+
+    # SPOT BUYING ZONE & TARGETS
+    spot_buy_zone_1 = demand_zone if demand_zone < live_price else live_price * 0.98
+    spot_buy_zone_2 = live_price * 0.95
+    spot_tp1 = live_price * 1.08
+    spot_tp2 = live_price * 1.15
+    spot_tp3 = live_price * 1.25
+    spot_sl = spot_buy_zone_2 * 0.93
+
     if bullish_score >= 3:
-        signal_type = "LONG 🟢 (BUY)"
-        entry_low = live_price * 0.997
-        entry_high = live_price * 1.002
-        tp1 = live_price * 1.015
-        tp2 = live_price * 1.030
-        tp3 = live_price * 1.050
-        sl1 = live_price * 0.985
-        sl2 = live_price * 0.970
+        primary_bias = "LONG 🟢 (BULLISH FAVORED)"
+        recommended_mode = "FUTURES LONG / SPOT BUY"
+        risk_level = "LOW TO MEDIUM RISK 🟢"
         win_prob = 75 + (bullish_score * 4)
         ai_decision = "BUY ENTRY RECOMMENDED"
-        ai_reason = "Strong bullish momentum across indicators. Good risk-reward spot."
+        ai_reason = "Bullish structure present across major indicators. Spot and Long positions active."
         ai_box_style = "bold green"
     else:
-        signal_type = "SHORT 🔴 (SELL / WAIT)"
-        entry_low = live_price * 0.998
-        entry_high = live_price * 1.003
-        tp1 = live_price * 0.985
-        tp2 = live_price * 0.970
-        tp3 = live_price * 0.950
-        sl1 = live_price * 1.015
-        sl2 = live_price * 1.030
+        primary_bias = "SHORT 🔴 (BEARISH FAVORED)"
+        recommended_mode = "FUTURES SHORT / SPOT WAIT"
+        risk_level = "HIGH RISK FOR LONG 🔴"
         win_prob = 40
-        ai_decision = "WAIT / HIGH RISK ZONE"
-        ai_reason = "Market neutral ya resistance par hai. Immediate long safe nahi hai."
+        ai_decision = "WAIT / SHORT FAVORED"
+        ai_reason = "Market under resistance. Spot buyers should wait for dip."
         ai_box_style = "bold yellow"
 
-    # PROFESSIONAL VIP TELEGRAM SIGNAL FORMAT
-    telegram_msg = f"""🔥 <b>VIP AI TRADING SIGNAL</b> 🔥
+    # PROFESSIONAL VIP TELEGRAM SIGNAL FORMAT (UPDATED HEADER & SPOT INCLUDED)
+    telegram_msg = f"""🔥 <b>Cryptopk Signal (SHeBi)</b> 🔥
 ----------------------------------
 📌 <b>PAIR:</b> #{coin}/USDT
-📈 <b>DIRECTION:</b> {signal_type}
-⚡ <b>LEVERAGE:</b> Cross 5x - 10x
+📊 <b>MARKET BIAS:</b> {primary_bias}
+⚡ <b>RECOMMENDED SETUP:</b> {recommended_mode}
+🛡️ <b>RISK LEVEL:</b> {risk_level}
+📍 <b>LIVE PRICE:</b> ${live_price:,.4f}
 
-🎯 <b>ENTRY ZONE:</b> ${entry_low:,.4f} - ${entry_high:,.4f}
-📍 <b>CURRENT PRICE:</b> ${live_price:,.4f}
+----------------------------------
+📈 <b>FUTURES LONG SETUP (Cross 5x - 10x):</b>
+ ├ <b>Entry Zone:</b> ${f_long_entry_low:,.4f} - ${f_long_entry_high:,.4f}
+ ├ <b>TP 1:</b> ${f_long_tp1:,.4f}
+ ├ <b>TP 2:</b> ${f_long_tp2:,.4f}
+ ├ <b>TP 3:</b> ${f_long_tp3:,.4f}
+ └ <b>Stop Loss:</b> ${f_long_sl:,.4f}
 
-🎯 <b>TARGET OBJECTIVES:</b>
- ├ <b>TP 1:</b> ${tp1:,.4f} (Scalp)
- ├ <b>TP 2:</b> ${tp2:,.4f} (Main Target)
- └ <b>TP 3:</b> ${tp3:,.4f} (Extended)
+📉 <b>FUTURES SHORT SETUP (Cross 5x - 10x):</b>
+ ├ <b>Entry Zone:</b> ${f_short_entry_high:,.4f} - ${f_short_entry_low:,.4f}
+ ├ <b>TP 1:</b> ${f_short_tp1:,.4f}
+ ├ <b>TP 2:</b> ${f_short_tp2:,.4f}
+ ├ <b>TP 3:</b> ${f_short_tp3:,.4f}
+ └ <b>Stop Loss:</b> ${f_short_sl:,.4f}
 
-🛡️ <b>STOP LOSS LEVELS:</b>
- ├ <b>SL 1 (Tight):</b> ${sl1:,.4f}
- └ <b>SL 2 (Safe):</b> ${sl2:,.4f}
+----------------------------------
+💎 <b>SPOT BUYING SETUP (Holders / Swing):</b>
+ ├ <b>Buy Zone 1:</b> ${spot_buy_zone_1:,.4f}
+ ├ <b>Buy Zone 2 (Dip):</b> ${spot_buy_zone_2:,.4f}
+ ├ <b>Target 1:</b> ${spot_tp1:,.4f} (+8%)
+ ├ <b>Target 2:</b> ${spot_tp2:,.4f} (+15%)
+ ├ <b>Target 3:</b> ${spot_tp3:,.4f} (+25%)
+ └ <b>Spot Stop Loss:</b> ${spot_sl:,.4f}
 
 ----------------------------------
 🧠 <b>AI CONFLUENCE & INDICATORS:</b>
 • <b>Win Probability:</b> {win_prob}%
 • <b>RSI (14):</b> {rsi:.1f}
 • <b>MACD Status:</b> {'Bullish Crossover 🟢' if macd_val > macd_sig else 'Bearish Crossover 🔴'}
-• <b>Trend (15m/1h/1d):</b> {trend_15m} | {trend_1h} | {trend_1d}
-• <b>Pattern:</b> {candle_pattern}
+• <b>Timeframe Trend (15m/1h/1d):</b> {trend_15m} | {trend_1h} | {trend_1d}
+• <b>Candle Pattern:</b> {candle_pattern}
 • <b>Market Sentiment:</b> {fng_val}/100 ({fng_class})
 • <b>Backtest Winrate:</b> {bt_rate:.1f}% ({bt_ratio})
 
-⚠️ <i>Always use 2-3% risk management per trade!</i>"""
+⚠️ <i>Risk Management: Max 2-3% wallet size per trade!</i>"""
 
     send_telegram_alert(telegram_msg)
 
     # 1. AI PREDICTION + BACKTESTING SUMMARY
     console.print("\n")
-    console.print(Rule(title=f"[bold cyan]🤖 ADVANCED AI PREDICTION ({coin}/USDT) | Live Price: ${live_price:,.4f}[/bold cyan]", style="cyan"))
+    console.print(Rule(title=f"[bold cyan]🤖 Cryptopk Signal (SHeBi) | Live Price: ${live_price:,.4f}[/bold cyan]", style="cyan"))
 
     ai_report = f"""
 🎯 [bold white]ENTRY DECISION:[/bold white] [{ai_box_style}]{ai_decision}[/{ai_box_style}]
@@ -346,8 +372,8 @@ def analyze_coin():
 
 📊 [bold green]WIN PROBABILITY:[/bold green] [bold green]{win_prob}% Chance[/bold green]
 📈 [bold magenta]BACKTEST ACCURACY:[/bold magenta] [bold yellow]{bt_rate:.1f}% Win Rate ({bt_ratio})[/bold yellow]
-🎯 [bold green]TARGETS:[/bold green] TP1: ${tp1:,.4f} | TP2: ${tp2:,.4f} | TP3: ${tp3:,.4f}
-🛡️ [bold red]STOP LOSS:[/bold red] SL1: ${sl1:,.4f} | SL2: ${sl2:,.4f}
+📈 [bold green]LONG TP1:[/bold green] ${f_long_tp1:,.4f} | 📉 [bold red]SHORT TP1:[/bold red] ${f_short_tp1:,.4f}
+💎 [bold cyan]SPOT TARGET 1:[/bold cyan] ${spot_tp1:,.4f}
 """
     console.print(Panel(ai_report, title="[bold cyan]⚡ AI ANALYSIS SUMMARY[/bold cyan]", style=ai_box_style))
 
@@ -357,7 +383,6 @@ def analyze_coin():
 
 def main():
     show_header()
-    # Startup test message has been removed as requested.
     running = True
     while running:
         running = analyze_coin()
