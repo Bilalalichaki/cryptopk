@@ -22,10 +22,10 @@ def send_telegram_alert(message: str):
     payload = {"chat_id": TELEGRAM_CHAT_ID, "text": message, "parse_mode": "HTML"}
     
     # Local Tor SOCKS5 Proxy to bypass ISP blocks in Pakistan
-   # proxies = {
-   #     'http': 'socks5h://127.0.0.1:9050',
-  #      'https': 'socks5h://127.0.0.1:9050'
-   # }
+    proxies = {
+        'http': 'socks5h://127.0.0.1:9050',
+        'https': 'socks5h://127.0.0.1:9050'
+    }
 
     try:
         res = requests.post(url, json=payload, proxies=proxies, timeout=15)
