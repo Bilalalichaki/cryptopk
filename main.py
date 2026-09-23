@@ -12,7 +12,7 @@ console = Console()
 # ⚙️ TELEGRAM CONFIGURATION
 # ==========================================
 TELEGRAM_BOT_TOKEN = "8785813821:AAGR2kLZg6EKepSEtW5NoDs66tRqUaPIEP8"
-TELEGRAM_CHAT_ID = "-1004298549221"
+TELEGRAM_CHAT_ID = "-1004298549221" 
 
 def send_telegram_alert(message: str):
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
@@ -39,17 +39,17 @@ def send_telegram_alert(message: str):
 
     return False
 
-def get_top_100_coins():
+def get_top_coins(limit=100):
     url = "https://api.binance.com/api/v3/ticker/24hr"
     try:
         response = requests.get(url, timeout=10)
         data = response.json()
         usdt_pairs = [item for item in data if item['symbol'].endswith('USDT') and not item['symbol'].startswith('UP') and not item['symbol'].startswith('DOWN')]
         sorted_pairs = sorted(usdt_pairs, key=lambda x: float(x['quoteVolume']), reverse=True)
-        top_100 = [item['symbol'].replace('USDT', '') for item in sorted_pairs[:100]]
-        return top_100
+        top_coins = [item['symbol'].replace('USDT', '') for item in sorted_pairs[:limit]]
+        return top_coins
     except Exception as e:
-        console.print(f"[bold red]❌ Binance Top 100 fetch error: {e}[/bold red]")
+        console.print(f"[bold red]❌ Binance Top Coins fetch error: {e}[/bold red]")
         return []
 
 def get_binance_klines(symbol: str, interval="1h", limit=100):
@@ -57,6 +57,8 @@ def get_binance_klines(symbol: str, interval="1h", limit=100):
     try:
         response = requests.get(url, timeout=5)
         data = response.json()
+        if isinstance(data, dict) and "code" in data:
+            return None
         df = pd.DataFrame(data, columns=[
             'open_time', 'open', 'high', 'low', 'close', 'volume',
             'close_time', 'qav', 'num_trades', 'taker_base_vol', 'taker_quote_vol', 'ignore'
@@ -178,7 +180,7 @@ def analyze_candlestick_details(df):
 
     return pattern_name, candle_strength, weakness_zone
 
-def analyze_and_filter(coin: str):
+def analyze_and_filter(coin: str, force_send=False):
     df_15m = get_binance_klines(coin, interval="15m")
     df_1h  = get_binance_klines(coin, interval="1h")
     df_1d  = get_binance_klines(coin, interval="1d")
@@ -218,15 +220,16 @@ def analyze_and_filter(coin: str):
     if live_price < ema20: bearish_score += 1
     if "BEARISH" in trend_1d: bearish_score += 1
 
-    if bullish_score < 4 and bearish_score < 4:
+    # Single search option me filter bypass ho jayega
+    if not force_send and (bullish_score < 4 and bearish_score < 4):
         return None
 
-    if bullish_score >= 4:
+    if bullish_score >= bearish_score:
         primary_bias = "LONG 🟢 (STRONG BULLISH)"
         where_to_trade = "✅ FUTURES LONG &amp; SPOT BUY BOTH (Best Opportunity)"
         recommended_mode = "FUTURES LONG / SPOT BUY"
         risk_level = "LOW RISK 🟢"
-        win_prob = 82 + (bullish_score * 3)
+        win_prob = min(95, 82 + (bullish_score * 3))
     else:
         primary_bias = "SHORT 🔴 (STRONG BEARISH)"
         where_to_trade = "⚠️ FUTURES SHORT ONLY (Avoid Spot Buy)"
@@ -251,7 +254,7 @@ def analyze_and_filter(coin: str):
 
     telegram_msg = f"""🔥 <b>BEST TRADE OPPORTUNITY (Cryptopk - SHeBi)</b> 🔥
 ----------------------------------
-📌 <b>PAIR:</b> #{coin}/USDT
+📌 <b>PAIR:</b> #{coin.upper()}/USDT
 📊 <b>MARKET BIAS:</b> {primary_bias}
 🎯 <b>TRADE RECOMMENDATION:</b>
 <b>{where_to_trade}</b>
@@ -280,7 +283,7 @@ def analyze_and_filter(coin: str):
 💎 <b>SPOT BUYING SETUP:</b>
  ├ <b>Buy Zones:</b> ${spot_buy_1:,.4f} | ${spot_buy_2:,.4f}
  ├ <b>Targets:</b> ${spot_tp1:,.4f} (+8%) | ${spot_tp2:,.4f} (+15%) | ${spot_tp3:,.4f} (+25%)
- └ <b>Spot Stop Loss:</b> ${spot_sl:,.4f}
+ └ <b>Stop Loss:</b> ${spot_sl:,.4f}
 
 ----------------------------------
 🧠 <b>ALL INDICATORS &amp; CONFLUENCE:</b>
@@ -294,23 +297,48 @@ def analyze_and_filter(coin: str):
 • <b>Volume Status:</b> {vol_status}
 • <b>Trend (15m / 1h / 1d):</b> {trend_15m} | {trend_1h} | {trend_1d}
 """
-    return telegram_msg, coin
+    return telegram_msg, coin.upper()
 
 def main():
     console.clear()
-    console.print(Panel("[bold cyan]🚀 SCANNING MARKET FOR TODAY'S BEST TRADES 🚀\nCryptopk Signal (SHeBi)[/bold cyan]", style="bold blue"))
+    console.print(Panel("[bold cyan]🚀 CRYPTOPK AI SIGNAL GENERATOR (SHeBi) 🚀[/bold cyan]", style="bold blue"))
     
-    top_coins = get_top_100_coins()
-    if not top_coins:
+    console.print("[bold yellow]Select Scan Option:[/bold yellow]")
+    console.print("1. Scan Top 10 Coins")
+    console.print("2. Scan Top 20 Coins")
+    console.print("3. Scan Top 100 Coins")
+    console.print("4. Search & Analyze Single Custom Coin (e.g., BTC, ETH, SOL)")
+    
+    choice = input("\nEnter choice (1, 2, 3, or 4): ").strip()
+    
+    coins_to_scan = []
+    force_send = False
+
+    if choice == "1":
+        coins_to_scan = get_top_coins(10)
+    elif choice == "2":
+        coins_to_scan = get_top_coins(20)
+    elif choice == "3":
+        coins_to_scan = get_top_coins(100)
+    elif choice == "4":
+        custom_coin = input("Enter Coin Symbol (e.g., SOL or BTC): ").strip().upper()
+        custom_coin = custom_coin.replace("USDT", "")
+        coins_to_scan = [custom_coin]
+        force_send = True  # Single search me AI setup direct alert bhejega
+    else:
+        console.print("[bold red]Invalid option! Defaulting to Top 100 Coins.[/bold red]")
+        coins_to_scan = get_top_coins(100)
+
+    if not coins_to_scan:
         console.print("[bold red]❌ Coins list fetch nahi ho saki.[/bold red]")
         return
 
-    console.print(f"[bold yellow]📊 Filtering Top {len(top_coins)} Coins on Binance...[/bold yellow]\n")
+    console.print(f"\n[bold yellow]📊 Filtering {len(coins_to_scan)} Coin(s) on Binance...[/bold yellow]\n")
 
     best_trades_count = 0
-    for idx, coin in enumerate(top_coins, 1):
+    for idx, coin in enumerate(coins_to_scan, 1):
         try:
-            res = analyze_and_filter(coin)
+            res = analyze_and_filter(coin, force_send=force_send)
             if res:
                 msg, coin_name = res
                 sent = send_telegram_alert(msg)
@@ -320,13 +348,13 @@ def main():
                 else:
                     console.print(f"[bold red]❌ Failed to send Telegram alert for #{coin_name}[/bold red]")
             else:
-                console.print(f"[dim gray]⏭️ [{idx}/100] #{coin} skipped (Weak Setup)[/dim gray]")
+                console.print(f"[dim gray]⏭️ [{idx}/{len(coins_to_scan)}] #{coin} skipped (Weak Setup)[/dim gray]")
             time.sleep(1.2)
         except Exception as e:
             console.print(f"[bold red]❌ Error scanning {coin}: {e}[/bold red]")
             continue
 
-    console.print(f"\n[bold green]🎉 COMPLETE! Total {best_trades_count} Best Trades found & sent to Telegram.[/bold green]")
+    console.print(f"\n[bold green]🎉 COMPLETE! Total {best_trades_count} Best Trade Signal(s) sent to Telegram.[/bold green]")
 
 if __name__ == "__main__":
     main()
