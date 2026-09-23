@@ -12,7 +12,7 @@ console = Console()
 # ⚙️ TELEGRAM CONFIGURATION
 # ==========================================
 TELEGRAM_BOT_TOKEN = "8785813821:AAGR2kLZg6EKepSEtW5NoDs66tRqUaPIEP8"
-TELEGRAM_CHAT_ID = "@Cryptopak" 
+TELEGRAM_CHAT_ID = "-1004298549221"
 
 def send_telegram_alert(message: str):
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
