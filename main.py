@@ -16,7 +16,7 @@ TELEGRAM_BOT_TOKEN = "8785813821:AAGR2kLZg6EKepSEtW5NoDs66tRqUaPIEP8"
 # ⚠️ APNI CHAT / CHANNEL ID YAHAN CHECK KAREIN:
 # Personal Chat ke liye ID sahi hai: "5846593253"
 # Agar Channel/Group me bhejna hai toh wahan ka Username (e.g. "@Cryptopk") ya Channel ID daliye
-TELEGRAM_CHAT_ID = "5846593253" 
+TELEGRAM_CHAT_ID = "@Cryptopak"
 
 def send_telegram_alert(message: str):
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
