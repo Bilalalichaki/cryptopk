@@ -1,9 +1,9 @@
 import requests
 import pandas as pd
+import numpy as np
 import time
 from rich.console import Console
 from rich.panel import Panel
-from rich.rule import Rule
 
 console = Console()
 
@@ -84,7 +84,7 @@ def get_binance_klines(symbol: str, interval="1h", limit=100):
     except Exception:
         return None
 
-# Indicator Calculations
+# Purane Indicators
 def calculate_rsi(df, period=14):
     delta = df['close'].diff()
     gain = (delta.where(delta > 0, 0)).rolling(window=period).mean()
@@ -119,6 +119,32 @@ def check_volume_spike(df):
         return "HIGH VOLUME SPIKE ⚡"
     return "NORMAL VOLUME ⚖️"
 
+# Naye Indicators (Extra Power)
+def calculate_stoch_rsi(df, period=14):
+    delta = df['close'].diff()
+    gain = (delta.where(delta > 0, 0)).rolling(window=period).mean()
+    loss = (-delta.where(delta < 0, 0)).rolling(window=period).mean()
+    rs = gain / loss
+    rsi = 100 - (100 / (1 + rs))
+    
+    stoch_rsi = (rsi - rsi.rolling(period).min()) / (rsi.rolling(period).max() - rsi.rolling(period).min())
+    k = stoch_rsi.rolling(3).mean() * 100
+    return k.iloc[-1]
+
+def calculate_vwap(df):
+    tp = (df['high'] + df['low'] + df['close']) / 3
+    vwap = (tp * df['volume']).cumsum() / df['volume'].cumsum()
+    return vwap.iloc[-1]
+
+def calculate_atr(df, period=14):
+    high_low = df['high'] - df['low']
+    high_close = np.abs(df['high'] - df['close'].shift())
+    low_close = np.abs(df['low'] - df['close'].shift())
+    ranges = pd.concat([high_low, high_close, low_close], axis=1)
+    true_range = np.max(ranges, axis=1)
+    atr = true_range.rolling(period).mean()
+    return atr.iloc[-1]
+
 def get_tf_trend(df):
     if df is None or df.empty:
         return "N/A"
@@ -126,7 +152,6 @@ def get_tf_trend(df):
     ema20 = df['close'].ewm(span=20, adjust=False).mean().iloc[-1]
     return "BULLISH 📈" if live_price > ema20 else "BEARISH 📉"
 
-# Advanced Candlestick Pattern & Strength Analysis
 def analyze_candlestick_details(df):
     curr = df.iloc[-1]
     prev = df.iloc[-2]
@@ -170,39 +195,66 @@ def analyze_candlestick_details(df):
 
     return pattern_name, candle_strength, weakness_zone
 
-def analyze_and_send(coin: str, count: int):
+def analyze_and_filter(coin: str):
     df_15m = get_binance_klines(coin, interval="15m")
     df_1h  = get_binance_klines(coin, interval="1h")
     df_1d  = get_binance_klines(coin, interval="1d")
 
     if df_1h is None or df_1h.empty:
-        return
+        return None
 
     live_price = df_1h['close'].iloc[-1]
 
-    # Indicators Calculations
     rsi = calculate_rsi(df_1h)
     macd_val, macd_sig = calculate_macd(df_1h)
     ema20, sma50 = calculate_ma(df_1h)
     upper_bb, lower_bb = calculate_bollinger_bands(df_1h)
     vol_status = check_volume_spike(df_1h)
+    stoch_k = calculate_stoch_rsi(df_1h)
+    vwap_val = calculate_vwap(df_1h)
+    atr_val = calculate_atr(df_1h)
 
-    # Candlestick Deep Analysis
     candle_pattern, candle_strength, weakness_info = analyze_candlestick_details(df_1h)
 
-    # Multi Timeframe Trends
     trend_15m = get_tf_trend(df_15m)
     trend_1h  = get_tf_trend(df_1h)
     trend_1d  = get_tf_trend(df_1d)
 
-    # Bullish Logic
+    # Score calculation
     bullish_score = 0
-    if 30 < rsi < 65: bullish_score += 1
+    bearish_score = 0
+
+    if 35 < rsi < 65: bullish_score += 1
     if macd_val > macd_sig: bullish_score += 1
     if live_price > ema20: bullish_score += 1
     if "BULLISH" in trend_1d: bullish_score += 1
+    if live_price > vwap_val: bullish_score += 1
+    if stoch_k < 80 and stoch_k > 20: bullish_score += 1
 
-    # Futures Setups
+    if rsi > 65 or rsi < 35: bearish_score += 1
+    if macd_val < macd_sig: bearish_score += 1
+    if live_price < ema20: bearish_score += 1
+    if "BEARISH" in trend_1d: bearish_score += 1
+
+    # Sirf Strong Coins Filter (Score Threshold)
+    if bullish_score < 4 and bearish_score < 4:
+        return None  # Filter out weak signals
+
+    # Recommendation Engine (Where to trade)
+    if bullish_score >= 4:
+        primary_bias = "LONG 🟢 (STRONG BULLISH)"
+        where_to_trade = "✅ FUTURES LONG & SPOT BUY BOTH (Best Opportunity)"
+        recommended_mode = "FUTURES LONG / SPOT BUY"
+        risk_level = "LOW RISK 🟢"
+        win_prob = 82 + (bullish_score * 3)
+    else:
+        primary_bias = "SHORT 🔴 (STRONG BEARISH)"
+        where_to_trade = "⚠️ FUTURES SHORT ONLY (Avoid Spot Buy)"
+        recommended_mode = "FUTURES SHORT ONLY"
+        risk_level = "MEDIUM TO HIGH RISK 🔴"
+        win_prob = 75
+
+    # Setups
     f_long_entry_low, f_long_entry_high = live_price * 0.997, live_price * 1.002
     f_long_tp1, f_long_tp2, f_long_tp3 = live_price * 1.015, live_price * 1.030, live_price * 1.050
     f_long_sl = live_price * 0.982
@@ -211,7 +263,6 @@ def analyze_and_send(coin: str, count: int):
     f_short_tp1, f_short_tp2, f_short_tp3 = live_price * 0.985, live_price * 0.970, live_price * 0.950
     f_short_sl = live_price * 1.018
 
-    # Spot Setups
     spot_buy_1 = live_price * 0.98
     spot_buy_2 = live_price * 0.95
     spot_tp1 = live_price * 1.08
@@ -219,22 +270,12 @@ def analyze_and_send(coin: str, count: int):
     spot_tp3 = live_price * 1.25
     spot_sl = spot_buy_2 * 0.93
 
-    if bullish_score >= 3:
-        primary_bias = "LONG 🟢 (BULLISH)"
-        recommended_mode = "FUTURES LONG / SPOT BUY"
-        risk_level = "LOW TO MEDIUM RISK 🟢"
-        win_prob = 75 + (bullish_score * 4)
-    else:
-        primary_bias = "SHORT 🔴 (BEARISH)"
-        recommended_mode = "FUTURES SHORT / SPOT WAIT"
-        risk_level = "HIGH RISK FOR LONG 🔴"
-        win_prob = 45
-
-    # Complete Message Format with All Indicators & Candle Details Included
-    telegram_msg = f"""🔥 <b>Cryptopk Signal (SHeBi) #{count}</b> 🔥
+    telegram_msg = f"""🔥 <b>BEST TRADE OPPORTUNITY (Cryptopk - SHeBi)</b> 🔥
 ----------------------------------
 📌 <b>PAIR:</b> #{coin}/USDT
 📊 <b>MARKET BIAS:</b> {primary_bias}
+🎯 <b>TRADE RECOMMENDATION:</b>
+<b>{where_to_trade}</b>
 ⚡ <b>SETUP:</b> {recommended_mode}
 🛡️ <b>RISK LEVEL:</b> {risk_level}
 📍 <b>CURRENT PRICE:</b> ${live_price:,.4f}
@@ -266,36 +307,44 @@ def analyze_and_send(coin: str, count: int):
 🧠 <b>ALL INDICATORS & CONFLUENCE:</b>
 • <b>AI Win Probability:</b> {win_prob}%
 • <b>RSI (14):</b> {rsi:.2f} ({'Oversold 🟢' if rsi < 30 else 'Overbought 🔴' if rsi > 70 else 'Neutral ⚖️'})
+• <b>Stoch RSI (K):</b> {stoch_k:.1f}
+• <b>VWAP:</b> ${vwap_val:,.4f} | <b>ATR (Volatilty):</b> ${atr_val:,.4f}
 • <b>MACD Status:</b> {'Bullish Crossover 🟢' if macd_val > macd_sig else 'Bearish Crossover 🔴'}
 • <b>EMA 20 / SMA 50:</b> ${ema20:,.4f} / ${sma50:,.4f}
 • <b>Bollinger Upper/Lower:</b> ${upper_bb:,.4f} / ${lower_bb:,.4f}
 • <b>Volume Status:</b> {vol_status}
 • <b>Trend (15m / 1h / 1d):</b> {trend_15m} | {trend_1h} | {trend_1d}
 """
-
-    send_telegram_alert(telegram_msg)
-    console.print(f"[bold green]✅ [{count}/100] Signal Sent for #{coin}[/bold green]")
+    return telegram_msg, coin
 
 def main():
     console.clear()
-    console.print(Panel("[bold cyan]🚀 STARTING AUTOMATED SCANNER FOR TOP 100 COINS 🚀\nCryptopk Signal (SHeBi)[/bold cyan]", style="bold blue"))
+    console.print(Panel("[bold cyan]🚀 SCANNING MARKET FOR TODAY'S BEST TRADES 🚀\nCryptopk Signal (SHeBi)[/bold cyan]", style="bold blue"))
     
     top_coins = get_top_100_coins()
     if not top_coins:
         console.print("[bold red]❌ Coins list fetch nahi ho saki.[/bold red]")
         return
 
-    console.print(f"[bold yellow]📊 Found Top {len(top_coins)} Coins on Binance by Volume.[/bold yellow]\n")
+    console.print(f"[bold yellow]📊 Filtering Top {len(top_coins)} Coins on Binance...[/bold yellow]\n")
 
+    best_trades_count = 0
     for idx, coin in enumerate(top_coins, 1):
         try:
-            analyze_and_send(coin, idx)
-            time.sleep(1.5)
+            res = analyze_and_filter(coin)
+            if res:
+                msg, coin_name = res
+                send_telegram_alert(msg)
+                best_trades_count += 1
+                console.print(f"[bold green]🔥 [BEST TRADE #{best_trades_count}] Signal Sent for #{coin_name}[/bold green]")
+            else:
+                console.print(f"[dim gray]⏭️ [{idx}/100] #{coin} skipped (Weak Setup)[/dim gray]")
+            time.sleep(1.2)
         except Exception as e:
             console.print(f"[bold red]❌ Error scanning {coin}: {e}[/bold red]")
             continue
 
-    console.print("\n[bold green]🎉 SCANNING COMPLETE! Top 100 Signals sent to Telegram.[/bold green]")
+    console.print(f"\n[bold green]🎉 COMPLETE! Total {best_trades_count} Best Trades found & sent to Telegram.[/bold green]")
 
 if __name__ == "__main__":
     main()
