@@ -12,55 +12,33 @@ console = Console()
 # ⚙️ TELEGRAM CONFIGURATION
 # ==========================================
 TELEGRAM_BOT_TOKEN = "8785813821:AAGR2kLZg6EKepSEtW5NoDs66tRqUaPIEP8"
-
-# ⚠️ APNI CHAT / CHANNEL ID YAHAN CHECK KAREIN:
-# Personal Chat ke liye ID sahi hai: "5846593253"
-# Agar Channel/Group me bhejna hai toh wahan ka Username (e.g. "@Cryptopk") ya Channel ID daliye
-TELEGRAM_CHAT_ID = "@Cryptopak"
+TELEGRAM_CHAT_ID = "@Cryptopak" 
 
 def send_telegram_alert(message: str):
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
-        return
+        return False
     
+    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
     payload = {"chat_id": TELEGRAM_CHAT_ID, "text": message, "parse_mode": "HTML"}
     
-    urls = [
-        f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage",
-        f"https://telegram-bot-api.vercel.app/bot{TELEGRAM_BOT_TOKEN}/sendMessage",
-        f"https://api.api.pwrtelegram.xyz/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
-    ]
-    
-    proxies_list = [
-        None,
-        {'http': 'socks5h://184.174.9.190:1080', 'https': 'socks5h://184.174.9.190:1080'},
-        {'http': 'http://185.199.229.156:7492', 'https': 'http://185.199.229.156:7492'}
-    ]
+    # Local Tor SOCKS5 Proxy to bypass ISP blocks in Pakistan
+    proxies = {
+        'http': 'socks5h://127.0.0.1:9050',
+        'https': 'socks5h://127.0.0.1:9050'
+    }
 
-    for target_url in urls:
-        try:
-            res = requests.post(target_url, json=payload, timeout=8)
-            res_json = res.json()
-            if res_json.get("ok"):
-                return True
-            else:
-                console.print(f"[bold red]❌ Telegram API Error: {res_json.get('description')}[/bold red]")
-        except Exception:
-            continue
+    try:
+        res = requests.post(url, json=payload, proxies=proxies, timeout=15)
+        if res.status_code == 200 and res.json().get("ok"):
+            return True
+        else:
+            if res.text:
+                console.print(f"[bold red]❌ Telegram Error: {res.text}[/bold red]")
+    except Exception as e:
+        console.print(f"[bold red]❌ Request Error: {e}[/bold red]")
 
-    direct_url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
-    for px in proxies_list:
-        if px is None: 
-            continue
-        try:
-            res = requests.post(direct_url, json=payload, proxies=px, timeout=8)
-            res_json = res.json()
-            if res_json.get("ok"):
-                return True
-        except Exception:
-            continue
     return False
 
-# 1. Fetch Top 100 USDT Pairs by Volume
 def get_top_100_coins():
     url = "https://api.binance.com/api/v3/ticker/24hr"
     try:
@@ -74,7 +52,6 @@ def get_top_100_coins():
         console.print(f"[bold red]❌ Binance Top 100 fetch error: {e}[/bold red]")
         return []
 
-# 2. Fetch Binance Klines Data
 def get_binance_klines(symbol: str, interval="1h", limit=100):
     url = f"https://api.binance.com/api/v3/klines?symbol={symbol.upper()}USDT&interval={interval}&limit={limit}"
     try:
@@ -93,7 +70,6 @@ def get_binance_klines(symbol: str, interval="1h", limit=100):
     except Exception:
         return None
 
-# Indicators Calculations
 def calculate_rsi(df, period=14):
     delta = df['close'].diff()
     gain = (delta.where(delta > 0, 0)).rolling(window=period).mean()
