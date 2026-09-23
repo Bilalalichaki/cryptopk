@@ -2,6 +2,7 @@ import requests
 import pandas as pd
 import numpy as np
 import time
+import html
 from rich.console import Console
 from rich.panel import Panel
 
@@ -11,7 +12,11 @@ console = Console()
 # ⚙️ TELEGRAM CONFIGURATION
 # ==========================================
 TELEGRAM_BOT_TOKEN = "8785813821:AAGR2kLZg6EKepSEtW5NoDs66tRqUaPIEP8"
-TELEGRAM_CHAT_ID = "5846593253"
+
+# ⚠️ APNI CHAT / CHANNEL ID YAHAN CHECK KAREIN:
+# Personal Chat ke liye ID sahi hai: "5846593253"
+# Agar Channel/Group me bhejna hai toh wahan ka Username (e.g. "@Cryptopk") ya Channel ID daliye
+TELEGRAM_CHAT_ID = "5846593253" 
 
 def send_telegram_alert(message: str):
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
@@ -19,42 +24,41 @@ def send_telegram_alert(message: str):
     
     payload = {"chat_id": TELEGRAM_CHAT_ID, "text": message, "parse_mode": "HTML"}
     
-    # Alternative Reverse Proxy Endpoints (No VPN required)
     urls = [
         f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage",
         f"https://telegram-bot-api.vercel.app/bot{TELEGRAM_BOT_TOKEN}/sendMessage",
         f"https://api.api.pwrtelegram.xyz/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
     ]
     
-    # Public Working Proxies (HTTP & SOCKS5)
     proxies_list = [
-        None,  # Direct Connection
+        None,
         {'http': 'socks5h://184.174.9.190:1080', 'https': 'socks5h://184.174.9.190:1080'},
-        {'http': 'http://185.199.229.156:7492', 'https': 'http://185.199.229.156:7492'},
-        {'http': 'socks5h://98.162.25.29:4145', 'https': 'socks5h://98.162.25.29:4145'},
-        {'http': 'socks5h://192.252.209.155:14470', 'https': 'socks5h://192.252.209.155:14470'}
+        {'http': 'http://185.199.229.156:7492', 'https': 'http://185.199.229.156:7492'}
     ]
 
-    # Try Endpoints first
     for target_url in urls:
         try:
-            res = requests.post(target_url, json=payload, timeout=7)
-            if res.json().get("ok"):
-                return
+            res = requests.post(target_url, json=payload, timeout=8)
+            res_json = res.json()
+            if res_json.get("ok"):
+                return True
+            else:
+                console.print(f"[bold red]❌ Telegram API Error: {res_json.get('description')}[/bold red]")
         except Exception:
             continue
 
-    # If endpoints are blocked, try Proxies
     direct_url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
     for px in proxies_list:
         if px is None: 
             continue
         try:
-            res = requests.post(direct_url, json=payload, proxies=px, timeout=7)
-            if res.json().get("ok"):
-                return
+            res = requests.post(direct_url, json=payload, proxies=px, timeout=8)
+            res_json = res.json()
+            if res_json.get("ok"):
+                return True
         except Exception:
             continue
+    return False
 
 # 1. Fetch Top 100 USDT Pairs by Volume
 def get_top_100_coins():
@@ -130,7 +134,6 @@ def calculate_stoch_rsi(df, period=14):
     loss = (-delta.where(delta < 0, 0)).rolling(window=period).mean()
     rs = gain / loss
     rsi = 100 - (100 / (1 + rs))
-    
     stoch_rsi = (rsi - rsi.rolling(period).min()) / (rsi.rolling(period).max() - rsi.rolling(period).min())
     k = stoch_rsi.rolling(3).mean() * 100
     return k.iloc[-1]
@@ -244,7 +247,7 @@ def analyze_and_filter(coin: str):
 
     if bullish_score >= 4:
         primary_bias = "LONG 🟢 (STRONG BULLISH)"
-        where_to_trade = "✅ FUTURES LONG & SPOT BUY BOTH (Best Opportunity)"
+        where_to_trade = "✅ FUTURES LONG &amp; SPOT BUY BOTH (Best Opportunity)"
         recommended_mode = "FUTURES LONG / SPOT BUY"
         risk_level = "LOW RISK 🟢"
         win_prob = 82 + (bullish_score * 3)
@@ -281,7 +284,7 @@ def analyze_and_filter(coin: str):
 📍 <b>CURRENT PRICE:</b> ${live_price:,.4f}
 
 ----------------------------------
-🕯️ <b>CANDLESTICK & STRUCTURE ANALYSIS:</b>
+🕯️ <b>CANDLESTICK &amp; STRUCTURE ANALYSIS:</b>
 • <b>Active Pattern:</b> {candle_pattern}
 • <b>Candle Strength:</b> {candle_strength}
 • <b>Weakness / Danger Zone:</b> {weakness_info}
@@ -304,7 +307,7 @@ def analyze_and_filter(coin: str):
  └ <b>Spot Stop Loss:</b> ${spot_sl:,.4f}
 
 ----------------------------------
-🧠 <b>ALL INDICATORS & CONFLUENCE:</b>
+🧠 <b>ALL INDICATORS &amp; CONFLUENCE:</b>
 • <b>AI Win Probability:</b> {win_prob}%
 • <b>RSI (14):</b> {rsi:.2f} ({'Oversold 🟢' if rsi < 30 else 'Overbought 🔴' if rsi > 70 else 'Neutral ⚖️'})
 • <b>Stoch RSI (K):</b> {stoch_k:.1f}
@@ -334,9 +337,12 @@ def main():
             res = analyze_and_filter(coin)
             if res:
                 msg, coin_name = res
-                send_telegram_alert(msg)
-                best_trades_count += 1
-                console.print(f"[bold green]🔥 [BEST TRADE #{best_trades_count}] Signal Sent for #{coin_name}[/bold green]")
+                sent = send_telegram_alert(msg)
+                if sent:
+                    best_trades_count += 1
+                    console.print(f"[bold green]🔥 [BEST TRADE #{best_trades_count}] Signal Sent for #{coin_name}[/bold green]")
+                else:
+                    console.print(f"[bold red]❌ Failed to send Telegram alert for #{coin_name}[/bold red]")
             else:
                 console.print(f"[dim gray]⏭️ [{idx}/100] #{coin} skipped (Weak Setup)[/dim gray]")
             time.sleep(1.2)
