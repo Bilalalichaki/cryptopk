@@ -19,33 +19,38 @@ def send_telegram_alert(message: str):
     
     payload = {"chat_id": TELEGRAM_CHAT_ID, "text": message, "parse_mode": "HTML"}
     
+    # Alternative Reverse Proxy Endpoints (No VPN required)
     urls = [
         f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage",
         f"https://telegram-bot-api.vercel.app/bot{TELEGRAM_BOT_TOKEN}/sendMessage",
         f"https://api.api.pwrtelegram.xyz/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
     ]
     
+    # Public Working Proxies (HTTP & SOCKS5)
     proxies_list = [
-        None,
-        {'http': 'http://185.199.229.156:7492', 'https': 'http://185.199.229.156:7492'},
+        None,  # Direct Connection
         {'http': 'socks5h://184.174.9.190:1080', 'https': 'socks5h://184.174.9.190:1080'},
-        {'http': 'socks5h://127.0.0.1:9050', 'https': 'socks5h://127.0.0.1:9050'}
+        {'http': 'http://185.199.229.156:7492', 'https': 'http://185.199.229.156:7492'},
+        {'http': 'socks5h://98.162.25.29:4145', 'https': 'socks5h://98.162.25.29:4145'},
+        {'http': 'socks5h://192.252.209.155:14470', 'https': 'socks5h://192.252.209.155:14470'}
     ]
 
+    # Try Endpoints first
     for target_url in urls:
         try:
-            res = requests.post(target_url, json=payload, timeout=6)
+            res = requests.post(target_url, json=payload, timeout=7)
             if res.json().get("ok"):
                 return
         except Exception:
             continue
 
+    # If endpoints are blocked, try Proxies
     direct_url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
     for px in proxies_list:
         if px is None: 
             continue
         try:
-            res = requests.post(direct_url, json=payload, proxies=px, timeout=6)
+            res = requests.post(direct_url, json=payload, proxies=px, timeout=7)
             if res.json().get("ok"):
                 return
         except Exception:
@@ -84,7 +89,7 @@ def get_binance_klines(symbol: str, interval="1h", limit=100):
     except Exception:
         return None
 
-# Purane Indicators
+# Indicators Calculations
 def calculate_rsi(df, period=14):
     delta = df['close'].diff()
     gain = (delta.where(delta > 0, 0)).rolling(window=period).mean()
@@ -119,7 +124,6 @@ def check_volume_spike(df):
         return "HIGH VOLUME SPIKE ⚡"
     return "NORMAL VOLUME ⚖️"
 
-# Naye Indicators (Extra Power)
 def calculate_stoch_rsi(df, period=14):
     delta = df['close'].diff()
     gain = (delta.where(delta > 0, 0)).rolling(window=period).mean()
@@ -220,7 +224,6 @@ def analyze_and_filter(coin: str):
     trend_1h  = get_tf_trend(df_1h)
     trend_1d  = get_tf_trend(df_1d)
 
-    # Score calculation
     bullish_score = 0
     bearish_score = 0
 
@@ -229,18 +232,16 @@ def analyze_and_filter(coin: str):
     if live_price > ema20: bullish_score += 1
     if "BULLISH" in trend_1d: bullish_score += 1
     if live_price > vwap_val: bullish_score += 1
-    if stoch_k < 80 and stoch_k > 20: bullish_score += 1
+    if 20 < stoch_k < 80: bullish_score += 1
 
     if rsi > 65 or rsi < 35: bearish_score += 1
     if macd_val < macd_sig: bearish_score += 1
     if live_price < ema20: bearish_score += 1
     if "BEARISH" in trend_1d: bearish_score += 1
 
-    # Sirf Strong Coins Filter (Score Threshold)
     if bullish_score < 4 and bearish_score < 4:
-        return None  # Filter out weak signals
+        return None
 
-    # Recommendation Engine (Where to trade)
     if bullish_score >= 4:
         primary_bias = "LONG 🟢 (STRONG BULLISH)"
         where_to_trade = "✅ FUTURES LONG & SPOT BUY BOTH (Best Opportunity)"
@@ -254,7 +255,6 @@ def analyze_and_filter(coin: str):
         risk_level = "MEDIUM TO HIGH RISK 🔴"
         win_prob = 75
 
-    # Setups
     f_long_entry_low, f_long_entry_high = live_price * 0.997, live_price * 1.002
     f_long_tp1, f_long_tp2, f_long_tp3 = live_price * 1.015, live_price * 1.030, live_price * 1.050
     f_long_sl = live_price * 0.982
