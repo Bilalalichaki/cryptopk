@@ -337,7 +337,7 @@ def main():
                     msg, coin_name = res
                     current_time = time.time()
                     
-                    if coin_name not in sent_history or (current_time - sent_history[coin_name]) > 3600:
+                    if coin_name not in sent_history or (current_time - sent_history[coin_name]) > 10800:
                         sent = send_telegram_alert(msg)
                         if sent:
                             best_trades_count += 1
