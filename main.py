@@ -269,8 +269,8 @@ def analyze_and_filter(coin: str):
 
     telegram_msg = f"""🔥 <b>BEST TRADE OPPORTUNITY (Cryptopk - SHeBi)</b> 🔥
 ----------------------------------
-📌 <b>ASSET:</b> #{coin.upper()}/USDT ({asset_type})
-📊 <b>MARKET BIAS:</b> {primary_bias}
+📌 <b>COIN🪙:</b> #{coin.upper()}/USDT ({asset_type})
+📊 <b>MARKET:</b> {primary_bias}
 🎯 <b>TRADE RECOMMENDATION:</b>
 <b>{where_to_trade}</b>
 ⚡ <b>SETUP:</b> {recommended_mode}
@@ -354,8 +354,8 @@ def main():
                 console.print(f"[bold red]❌ Error scanning {coin}: {e}[/bold red]")
                 continue
 
-        console.print(f"\n[bold green]✅ Cycle Complete! Sent {best_trades_count} new signal(s). Sleeping 5 mins...[/bold green]")
-        time.sleep(300)
+        console.print(f"\n[bold green]✅ Cycle Complete! Sent {best_trades_count} new signal(s). Sleeping 20 mins...[/bold green]")
+        time.sleep(900)
 
 if __name__ == "__main__":
     main()
