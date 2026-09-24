@@ -21,7 +21,6 @@ def send_telegram_alert(message: str):
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
     payload = {"chat_id": TELEGRAM_CHAT_ID, "text": message, "parse_mode": "HTML"}
     
-    # Local Tor SOCKS5 Proxy to bypass ISP blocks in Pakistan
     proxies = {
         'http': 'socks5h://127.0.0.1:9050',
         'https': 'socks5h://127.0.0.1:9050'
@@ -41,14 +40,22 @@ def send_telegram_alert(message: str):
 
 def get_top_coins(limit=100):
     url = "https://api.binance.com/api/v3/ticker/24hr"
+    # Block stablecoins explicitly
+    STABLECOINS = ["USDC", "FDUSD", "BUSD", "TUSD", "USDP", "DAI", "USDT", "AEUR"]
     try:
         response = requests.get(url, timeout=10)
         data = response.json()
-        usdt_pairs = [item for item in data if item['symbol'].endswith('USDT') and not item['symbol'].startswith('UP') and not item['symbol'].startswith('DOWN')]
+        usdt_pairs = [
+            item for item in data 
+            if item['symbol'].endswith('USDT') 
+            and not item['symbol'].startswith('UP') 
+            and not item['symbol'].startswith('DOWN')
+            and item['symbol'].replace('USDT', '') not in STABLECOINS
+        ]
         sorted_pairs = sorted(usdt_pairs, key=lambda x: float(x['quoteVolume']), reverse=True)
         top_coins = [item['symbol'].replace('USDT', '') for item in sorted_pairs[:limit]]
         
-        # 🟡 Gold & Silver Pairs explicitly added
+        # Add Gold & Silver at top
         metals = ["XAU", "XAG"]
         for metal in metals:
             if metal not in top_coins:
@@ -215,32 +222,32 @@ def analyze_and_filter(coin: str):
     bullish_score = 0
     bearish_score = 0
 
-    if 35 < rsi < 65: bullish_score += 1
+    if rsi < 70: bullish_score += 1
     if macd_val > macd_sig: bullish_score += 1
     if live_price > ema20: bullish_score += 1
     if "BULLISH" in trend_1d: bullish_score += 1
     if live_price > vwap_val: bullish_score += 1
-    if 20 < stoch_k < 80: bullish_score += 1
 
-    if rsi > 65 or rsi < 35: bearish_score += 1
+    if rsi > 30: bearish_score += 1
     if macd_val < macd_sig: bearish_score += 1
     if live_price < ema20: bearish_score += 1
     if "BEARISH" in trend_1d: bearish_score += 1
 
-    if bullish_score < 4 and bearish_score < 4:
+    # Threshold set to 3 so major coins like BTC/ETH are not skipped easily
+    if bullish_score < 3 and bearish_score < 3:
         return None
 
     if bullish_score >= bearish_score:
-        primary_bias = "LONG 🟢 (STRONG BULLISH)"
-        where_to_trade = "✅ FUTURES LONG &amp; SPOT BUY BOTH (Best Opportunity)"
+        primary_bias = "LONG 🟢 (BULLISH)"
+        where_to_trade = "✅ FUTURES LONG &amp; SPOT BUY BOTH"
         recommended_mode = "FUTURES LONG / SPOT BUY"
         risk_level = "LOW RISK 🟢"
-        win_prob = min(95, 82 + (bullish_score * 3))
+        win_prob = min(95, 80 + (bullish_score * 3))
     else:
-        primary_bias = "SHORT 🔴 (STRONG BEARISH)"
-        where_to_trade = "⚠️ FUTURES SHORT ONLY (Avoid Spot Buy)"
+        primary_bias = "SHORT 🔴 (BEARISH)"
+        where_to_trade = "⚠️ FUTURES SHORT ONLY"
         recommended_mode = "FUTURES SHORT ONLY"
-        risk_level = "MEDIUM TO HIGH RISK 🔴"
+        risk_level = "MEDIUM RISK 🔴"
         win_prob = 75
 
     f_long_entry_low, f_long_entry_high = live_price * 0.997, live_price * 1.002
