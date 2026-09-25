@@ -52,7 +52,7 @@ WATCHLIST = [
 
 
 COOLDOWN_SECONDS = 10800  # 3 Hours
-MIN_AI_SCORE = 70
+MIN_AI_SCORE = 65
 
 sent_history = {}
 active_trades = {}  # Live price tracking for TP/SL alerts
