@@ -22,6 +22,8 @@ WATCHLIST = [
     'XRPUSDT', 
     'PAXGUSDT', # XAU (Gold)
     'ZECUSDT'
+'XAUUSDT'
+'SOLUSDT'
 ]
 
 COOLDOWN_SECONDS = 10800  # 3 Hours
