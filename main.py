@@ -1,82 +1,88 @@
+import time
 import requests
 import pandas as pd
 import numpy as np
-import time
-import html
-from rich.console import Console
-from rich.panel import Panel
-
-console = Console()
 
 # ==========================================
-# ⚙️ TELEGRAM CONFIGURATION
+# CONFIGURATION & SETTINGS
 # ==========================================
-TELEGRAM_BOT_TOKEN = "8785813821:AAGR2kLZg6EKepSEtW5NoDs66tRqUaPIEP8"
-TELEGRAM_CHAT_ID = "-1004458934308" 
+TELEGRAM_BOT_TOKEN = "YOUR_TELEGRAM_BOT_TOKEN"
+TELEGRAM_CHAT_ID = "YOUR_TELEGRAM_CHAT_ID"
 
-def send_telegram_alert(message: str):
-    if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
-        return False
-    
-    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
-    payload = {"chat_id": TELEGRAM_CHAT_ID, "text": message, "parse_mode": "HTML"}
-    
-    proxies = {
-        'http': 'socks5h://127.0.0.1:9050',
-        'https': 'socks5h://127.0.0.1:9050'
-    }
+# Tor SOCKS5 Proxy Settings
+PROXIES = {
+    'http': 'socks5h://127.0.0.1:9050',
+    'https': 'socks5h://127.0.0.1:9050'
+}
 
+# Rotation & Anti-Spam Settings
+BATCH_SIZE = 50          # Har cycle me kitne naye coins scan karne hain
+SCAN_OFFSET = 0         # Market rotation index tracker
+COOLDOWN_SECONDS = 10800 # 3 Hours Cooldown per coin (3600s = 1 hr, 10800s = 3 hrs)
+MIN_AI_SCORE = 80       # Strict Win Probability Threshold (80%+)
+
+# Ignore Stablecoins & Fiat
+EXCLUDED_PAIRS = {'USDC', 'FDUSD', 'RLUSD', 'BUSD', 'DAI', 'USDT', 'EUR', 'AEUR', 'PAX', 'TUSD', 'USD1', 'U'}
+
+# Historical Cooldown Tracker
+sent_history = {}
+
+# ==========================================
+# HELPER FUNCTIONS
+# ==========================================
+def get_all_usdt_pairs():
+    """Binance se tamam valid USDT pairs fetch karke volume ke mutabiq sort karta hai"""
     try:
-        res = requests.post(url, json=payload, proxies=proxies, timeout=15)
-        if res.status_code == 200 and res.json().get("ok"):
-            return True
-        else:
-            if res.text:
-                console.print(f"[bold red]❌ Telegram Error: {res.text}[/bold red]")
-    except Exception as e:
-        console.print(f"[bold red]❌ Request Error: {e}[/bold red]")
-
-    return False
-
-def get_top_coins(limit=100):
-    url = "https://api.binance.com/api/v3/ticker/24hr"
-    # Block stablecoins explicitly
-    STABLECOINS = ["USDC", "FDUSD", "BUSD", "TUSD", "USDP", "DAI", "USDT", "AEUR"]
-    try:
-        response = requests.get(url, timeout=10)
+        url = "https://api.binance.com/api/v3/ticker/24hr"
+        response = requests.get(url, proxies=PROXIES, timeout=15)
         data = response.json()
-        usdt_pairs = [
-            item for item in data 
-            if item['symbol'].endswith('USDT') 
-            and not item['symbol'].startswith('UP') 
-            and not item['symbol'].startswith('DOWN')
-            and item['symbol'].replace('USDT', '') not in STABLECOINS
-        ]
-        sorted_pairs = sorted(usdt_pairs, key=lambda x: float(x['quoteVolume']), reverse=True)
-        top_coins = [item['symbol'].replace('USDT', '') for item in sorted_pairs[:limit]]
         
-        # Add Gold & Silver at top
-        metals = ["XAU", "XAG"]
-        for metal in metals:
-            if metal not in top_coins:
-                top_coins.insert(0, metal)
-
-        return top_coins
+        valid_pairs = []
+        for item in data:
+            symbol = item['symbol']
+            if symbol.endswith('USDT'):
+                base_asset = symbol.replace('USDT', '')
+                if base_asset not in EXCLUDED_PAIRS:
+                    valid_pairs.append({
+                        'symbol': symbol,
+                        'volume': float(item['quoteVolume'])
+                    })
+        
+        # Sort by 24h Volume (Highest to Lowest)
+        valid_pairs.sort(key=lambda x: x['volume'], reverse=True)
+        return [p['symbol'] for p in valid_pairs]
     except Exception as e:
-        console.print(f"[bold red]❌ Binance Top Coins fetch error: {e}[/bold red]")
-        return ["XAU", "XAG"]
+        print(f"[!] Error fetching market pairs: {e}")
+        return []
 
-def get_binance_klines(symbol: str, interval="1h", limit=100):
-    url = f"https://api.binance.com/api/v3/klines?symbol={symbol.upper()}USDT&interval={interval}&limit={limit}"
+def get_rotated_batch(all_pairs):
+    """Coins ko rotate karke 50-50 ke batches me divider karta hai"""
+    global SCAN_OFFSET
+    total_pairs = len(all_pairs)
+    if total_pairs == 0:
+        return []
+    
+    # Cap total scanned pairs to Top 250-300 for high liquidity
+    max_scan_limit = min(total_pairs, 250)
+    
+    if SCAN_OFFSET >= max_scan_limit:
+        SCAN_OFFSET = 0
+        
+    end_offset = min(SCAN_OFFSET + BATCH_SIZE, max_scan_limit)
+    batch = all_pairs[SCAN_OFFSET:end_offset]
+    
+    print(f"\n[🔄 Rotation Engine] Scanning coins {SCAN_OFFSET + 1} to {end_offset} of {max_scan_limit}")
+    SCAN_OFFSET = end_offset
+    return batch
+
+def fetch_klines(symbol, timeframe, limit=100):
+    """Binance se Candlestick Data Fetch Karta Hai"""
     try:
-        response = requests.get(url, timeout=5)
-        data = response.json()
-        if isinstance(data, dict) and "code" in data:
-            return None
-        df = pd.DataFrame(data, columns=[
-            'open_time', 'open', 'high', 'low', 'close', 'volume',
-            'close_time', 'qav', 'num_trades', 'taker_base_vol', 'taker_quote_vol', 'ignore'
-        ])
+        url = f"https://api.binance.com/api/v3/klines?symbol={symbol}&interval={timeframe}&limit={limit}"
+        res = requests.get(url, proxies=PROXIES, timeout=10)
+        data = res.json()
+        
+        df = pd.DataFrame(data, columns=['time', 'open', 'high', 'low', 'close', 'volume', '_', '_', '_', '_', '_', '_'])
         df['close'] = df['close'].astype(float)
         df['high'] = df['high'].astype(float)
         df['low'] = df['low'].astype(float)
@@ -86,276 +92,201 @@ def get_binance_klines(symbol: str, interval="1h", limit=100):
     except Exception:
         return None
 
-def calculate_rsi(df, period=14):
-    delta = df['close'].diff()
-    gain = (delta.where(delta > 0, 0)).rolling(window=period).mean()
-    loss = (-delta.where(delta < 0, 0)).rolling(window=period).mean()
-    rs = gain / loss
-    rsi = 100 - (100 / (1 + rs))
-    return rsi.iloc[-1]
-
-def calculate_macd(df, fast=12, slow=26, signal=9):
-    exp1 = df['close'].ewm(span=fast, adjust=False).mean()
-    exp2 = df['close'].ewm(span=slow, adjust=False).mean()
-    macd = exp1 - exp2
-    macd_signal = macd.ewm(span=signal, adjust=False).mean()
-    return macd.iloc[-1], macd_signal.iloc[-1]
-
-def calculate_ma(df):
-    ema20 = df['close'].ewm(span=20, adjust=False).mean().iloc[-1]
-    sma50 = df['close'].rolling(window=50).mean().iloc[-1]
-    return ema20, sma50
-
-def calculate_bollinger_bands(df, period=20):
-    sma = df['close'].rolling(window=period).mean()
-    std = df['close'].rolling(window=period).std()
-    upper = sma + (std * 2)
-    lower = sma - (std * 2)
-    return upper.iloc[-1], lower.iloc[-1]
-
-def check_volume_spike(df):
-    avg_vol = df['volume'].tail(20).mean()
-    curr_vol = df['volume'].iloc[-1]
-    if curr_vol > (avg_vol * 1.5):
-        return "HIGH VOLUME SPIKE ⚡"
-    return "NORMAL VOLUME ⚖️"
-
-def calculate_stoch_rsi(df, period=14):
-    delta = df['close'].diff()
-    gain = (delta.where(delta > 0, 0)).rolling(window=period).mean()
-    loss = (-delta.where(delta < 0, 0)).rolling(window=period).mean()
-    rs = gain / loss
-    rsi = 100 - (100 / (1 + rs))
-    stoch_rsi = (rsi - rsi.rolling(period).min()) / (rsi.rolling(period).max() - rsi.rolling(period).min())
-    k = stoch_rsi.rolling(3).mean() * 100
-    return k.iloc[-1]
-
-def calculate_vwap(df):
-    tp = (df['high'] + df['low'] + df['close']) / 3
-    vwap = (tp * df['volume']).cumsum() / df['volume'].cumsum()
-    return vwap.iloc[-1]
-
-def calculate_atr(df, period=14):
-    high_low = df['high'] - df['low']
-    high_close = np.abs(df['high'] - df['close'].shift())
-    low_close = np.abs(df['low'] - df['close'].shift())
-    ranges = pd.concat([high_low, high_close, low_close], axis=1)
-    true_range = np.max(ranges, axis=1)
-    atr = true_range.rolling(period).mean()
-    return atr.iloc[-1]
-
-def get_tf_trend(df):
-    if df is None or df.empty:
-        return "N/A"
-    live_price = df['close'].iloc[-1]
-    ema20 = df['close'].ewm(span=20, adjust=False).mean().iloc[-1]
-    return "BULLISH 📈" if live_price > ema20 else "BEARISH 📉"
-
-def analyze_candlestick_details(df):
-    curr = df.iloc[-1]
-    prev = df.iloc[-2]
-    c_open, c_close, c_high, c_low = curr['open'], curr['close'], curr['high'], curr['low']
-    p_open, p_close = prev['open'], prev['close']
+# ==========================================
+# TECHNICAL INDICATORS & CONFLUENCE SCORING
+# ==========================================
+def calculate_indicators(df):
+    """Technical Indicators Calculate Karta Hai"""
+    close = df['close']
     
-    body = abs(c_close - c_open)
-    lower_wick = min(c_open, c_close) - c_low
-    upper_wick = c_high - max(c_open, c_close)
-    total_range = c_high - c_low
+    # 1. RSI (14)
+    delta = close.diff()
+    gain = (delta.where(delta > 0, 0)).rolling(14).mean()
+    loss = (-delta.where(delta < 0, 0)).rolling(14).mean()
+    rs = gain / loss
+    rsi = 100 - (100 / (1 + rs))
+    
+    # 2. EMA (20) & SMA (50)
+    ema20 = close.ewm(span=20, adjust=False).mean()
+    sma50 = close.rolling(50).mean()
+    
+    # 3. MACD
+    ema12 = close.ewm(span=12, adjust=False).mean()
+    ema26 = close.ewm(span=26, adjust=False).mean()
+    macd_line = ema12 - ema26
+    signal_line = macd_line.ewm(span=9, adjust=False).mean()
+    
+    # 4. Bollinger Bands
+    sma20 = close.rolling(20).mean()
+    std = close.rolling(20).std()
+    upper_band = sma20 + (std * 2)
+    lower_band = sma20 - (std * 2)
+    
+    return {
+        'price': close.iloc[-1],
+        'rsi': rsi.iloc[-1],
+        'ema20': ema20.iloc[-1],
+        'sma50': sma50.iloc[-1],
+        'macd': macd_line.iloc[-1],
+        'macd_signal': signal_line.iloc[-1],
+        'bb_upper': upper_band.iloc[-1],
+        'bb_lower': lower_band.iloc[-1]
+    }
 
-    pattern_name = "Normal Candle"
-    candle_strength = "Moderate / Neutral"
-    weakness_zone = "No Major Weakness"
+def analyze_timeframe(df):
+    """Single Timeframe ke Indicators Check Karke Score Aur Trend Nikaalta Hai"""
+    if df is None or len(df) < 50:
+        return 0, "NEUTRAL"
+        
+    ind = calculate_indicators(df)
+    price = ind['price']
+    
+    bull_score = 0
+    bear_score = 0
+    
+    # RSI Condition
+    if ind['rsi'] < 35:
+        bull_score += 25
+    elif ind['rsi'] > 65:
+        bear_score += 25
+        
+    # EMA/SMA Trend Condition
+    if price > ind['ema20'] > ind['sma50']:
+        bull_score += 25
+    elif price < ind['ema20'] < ind['sma50']:
+        bear_score += 25
+        
+    # MACD Condition
+    if ind['macd'] > ind['macd_signal']:
+        bull_score += 25
+    elif ind['macd'] < ind['macd_signal']:
+        bear_score += 25
+        
+    # Bollinger Bands Reversal Condition
+    if price <= ind['bb_lower']:
+        bull_score += 25
+    elif price >= ind['bb_upper']:
+        bear_score += 25
 
-    if p_close < p_open and c_close > c_open and c_close > p_open and c_open < p_close:
-        pattern_name = "Bullish Engulfing 🚀"
-        candle_strength = "STRONG BUYING PRESSURE 💪"
-        weakness_zone = f"Weakness below ${c_low:,.4f}"
-    elif p_close > p_open and c_close < c_open and c_close < p_open and c_open > p_close:
-        pattern_name = "Bearish Engulfing 🔻"
-        candle_strength = "STRONG SELLING PRESSURE ⚠️"
-        weakness_zone = f"Weakness below ${c_close:,.4f}"
-    elif lower_wick > (2 * body) and upper_wick < body:
-        pattern_name = "Bullish Hammer 🔨"
-        candle_strength = "REJECTION FROM LOWS (Strong Dip Buy)"
-        weakness_zone = f"Break below ${c_low:,.4f} invalidates setup"
-    elif upper_wick > (2 * body) and lower_wick < body:
-        pattern_name = "Shooting Star / Upper Wick Rejection 💫"
-        candle_strength = "WEAKNESS AT HIGHS (Sellers Active)"
-        weakness_zone = f"Heavy resistance near ${c_high:,.4f}"
+    if bull_score > bear_score:
+        return bull_score, "LONG"
+    elif bear_score > bull_score:
+        return bear_score, "SHORT"
     else:
-        if c_close > c_open and body > (total_range * 0.6):
-            pattern_name = "Strong Bullish Marubozu 🟩"
-            candle_strength = "HIGH MOMENTUM BULLS"
-            weakness_zone = f"Weakness if price drops below ${c_open:,.4f}"
-        elif c_close < c_open and body > (total_range * 0.6):
-            pattern_name = "Strong Bearish Marubozu 🟥"
-            candle_strength = "HIGH MOMENTUM BEARS"
-            weakness_zone = f"Weakness below ${c_close:,.4f}"
+        return 0, "NEUTRAL"
 
-    return pattern_name, candle_strength, weakness_zone
-
-def analyze_and_filter(coin: str):
-    df_15m = get_binance_klines(coin, interval="15m")
-    df_1h  = get_binance_klines(coin, interval="1h")
-    df_1d  = get_binance_klines(coin, interval="1d")
-
-    if df_1h is None or df_1h.empty:
-        return None
-
-    live_price = df_1h['close'].iloc[-1]
-
-    rsi = calculate_rsi(df_1h)
-    macd_val, macd_sig = calculate_macd(df_1h)
-    ema20, sma50 = calculate_ma(df_1h)
-    upper_bb, lower_bb = calculate_bollinger_bands(df_1h)
-    vol_status = check_volume_spike(df_1h)
-    stoch_k = calculate_stoch_rsi(df_1h)
-    vwap_val = calculate_vwap(df_1h)
-    atr_val = calculate_atr(df_1h)
-
-    candle_pattern, candle_strength, weakness_info = analyze_candlestick_details(df_1h)
-
-    trend_15m = get_tf_trend(df_15m)
-    trend_1h  = get_tf_trend(df_1h)
-    trend_1d  = get_tf_trend(df_1d)
-
-    bullish_score = 0
-    bearish_score = 0
-
-    if rsi < 70: bullish_score += 1
-    if macd_val > macd_sig: bullish_score += 1
-    if live_price > ema20: bullish_score += 1
-    if "BULLISH" in trend_1d: bullish_score += 1
-    if live_price > vwap_val: bullish_score += 1
-
-    if rsi > 30: bearish_score += 1
-    if macd_val < macd_sig: bearish_score += 1
-    if live_price < ema20: bearish_score += 1
-    if "BEARISH" in trend_1d: bearish_score += 1
-
-    # Threshold set to 3 so major coins like BTC/ETH are not skipped easily
-    if bullish_score < 3 and bearish_score < 3:
-        return None
-
-    if bullish_score >= bearish_score:
-        primary_bias = "LONG 🟢 (BULLISH)"
-        where_to_trade = "✅ FUTURES LONG &amp; SPOT BUY BOTH"
-        recommended_mode = "FUTURES LONG / SPOT BUY"
-        risk_level = "LOW RISK 🟢"
-        win_prob = min(95, 80 + (bullish_score * 3))
+# ==========================================
+# MULTI-TIMEFRAME ANALYSIS ENGINE
+# ==========================================
+def analyze_and_filter(symbol):
+    """15m + 1h Multi-Timeframe Confirmation Logic"""
+    df_15m = fetch_klines(symbol, '15m')
+    df_1h = fetch_klines(symbol, '1h')
+    
+    score_15m, trend_15m = analyze_timeframe(df_15m)
+    score_1h, trend_1h = analyze_timeframe(df_1h)
+    
+    # 1. Check Multi-Timeframe Trend Match
+    if trend_15m == "NEUTRAL" or trend_15m != trend_1h:
+        return None # Reject if trends conflict
+        
+    # 2. Weighted Combined Score (60% 15m + 40% 1h)
+    combined_score = int((score_15m * 0.6) + (score_1h * 0.4))
+    
+    # 3. Strict Confluence Threshold Filter (80%+)
+    if combined_score < MIN_AI_SCORE:
+        return None # Reject weak setups
+        
+    price = df_15m['close'].iloc[-1]
+    
+    # Price Target & Stop Loss Calculation
+    if trend_15m == "LONG":
+        tp1 = round(price * 1.015, 4)
+        tp2 = round(price * 1.030, 4)
+        tp3 = round(price * 1.050, 4)
+        sl  = round(price * 0.985, 4)
     else:
-        primary_bias = "SHORT 🔴 (BEARISH)"
-        where_to_trade = "⚠️ FUTURES SHORT ONLY"
-        recommended_mode = "FUTURES SHORT ONLY"
-        risk_level = "MEDIUM RISK 🔴"
-        win_prob = 75
+        tp1 = round(price * 0.985, 4)
+        tp2 = round(price * 0.970, 4)
+        tp3 = round(price * 0.950, 4)
+        sl  = round(price * 1.015, 4)
+        
+    # Generate Formatted Telegram Signal Message
+    clean_name = symbol.replace('USDT', '')
+    msg = (
+        f"🔥 **AI HIGH CONFLUENCE SIGNAL** 🔥\n\n"
+        f"📌 **Asset:** #{clean_name} / USDT\n"
+        f"🎯 **Direction:** {trend_15m}\n"
+        f"📊 **AI Win Probability:** {combined_score}%\n\n"
+        f"💵 **Entry Price:** `{price}`\n"
+        f"🎯 **Target 1:** `{tp1}`\n"
+        f"🎯 **Target 2:** `{tp2}`\n"
+        f"🎯 **Target 3:** `{tp3}`\n"
+        f"🛑 **Stop Loss:** `{sl}`\n\n"
+        f"⚡ **Multi-TF Alignment:** 15m & 1h Confirmed\n"
+        f"🛡️ **Risk Level:** Medium-Low"
+    )
+    
+    return msg, clean_name
 
-    f_long_entry_low, f_long_entry_high = live_price * 0.997, live_price * 1.002
-    f_long_tp1, f_long_tp2, f_long_tp3 = live_price * 1.015, live_price * 1.030, live_price * 1.050
-    f_long_sl = live_price * 0.982
+def send_telegram_alert(message):
+    """Tor Proxy ke zariye Telegram Alert Push Karta Hai"""
+    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
+    payload = {
+        'chat_id': TELEGRAM_CHAT_ID,
+        'text': message,
+        'parse_mode': 'Markdown'
+    }
+    try:
+        res = requests.post(url, json=payload, proxies=PROXIES, timeout=30)
+        return res.status_code == 200
+    except Exception as e:
+        print(f"[!] Telegram Dispatch Failed: {e}")
+        return False
 
-    f_short_entry_low, f_short_entry_high = live_price * 0.998, live_price * 1.003
-    f_short_tp1, f_short_tp2, f_short_tp3 = live_price * 0.985, live_price * 0.970, live_price * 0.950
-    f_short_sl = live_price * 1.018
-
-    spot_buy_1 = live_price * 0.98
-    spot_buy_2 = live_price * 0.95
-    spot_tp1 = live_price * 1.08
-    spot_tp2 = live_price * 1.15
-    spot_tp3 = live_price * 1.25
-    spot_sl = spot_buy_2 * 0.93
-
-    asset_type = "GOLD/SILVER METAL" if coin.upper() in ["XAU", "XAG"] else "CRYPTO PAIR"
-
-    telegram_msg = f"""🔥 <b>BEST TRADE OPPORTUNITY (Cryptopk - SHeBi)</b> 🔥
-----------------------------------
-📌 <b>COIN🪙:</b> #{coin.upper()}/USDT ({asset_type})
-📊 <b>MARKET:</b> {primary_bias}
-🎯 <b>TRADE RECOMMENDATION:</b>
-<b>{where_to_trade}</b>
-⚡ <b>SETUP:</b> {recommended_mode}
-🛡️ <b>RISK LEVEL:</b> {risk_level}
-📍 <b>CURRENT PRICE:</b> ${live_price:,.4f}
-
-----------------------------------
-🕯️ <b>CANDLESTICK &amp; STRUCTURE ANALYSIS:</b>
-• <b>Active Pattern:</b> {candle_pattern}
-• <b>Candle Strength:</b> {candle_strength}
-• <b>Weakness / Danger Zone:</b> {weakness_info}
-
-----------------------------------
-📈 <b>FUTURES LONG (Cross 5x-10x):</b>
- ├ <b>Entry Zone:</b> ${f_long_entry_low:,.4f} - ${f_long_entry_high:,.4f}
- ├ <b>TP 1:</b> ${f_long_tp1:,.4f} | <b>TP 2:</b> ${f_long_tp2:,.4f} | <b>TP 3:</b> ${f_long_tp3:,.4f}
- └ <b>Stop Loss:</b> ${f_long_sl:,.4f}
-
-📉 <b>FUTURES SHORT (Cross 5x-10x):</b>
- ├ <b>Entry Zone:</b> ${f_short_entry_high:,.4f} - ${f_short_entry_low:,.4f}
- ├ <b>TP 1:</b> ${f_short_tp1:,.4f} | <b>TP 2:</b> ${f_short_tp2:,.4f} | <b>TP 3:</b> ${f_short_tp3:,.4f}
- └ <b>Stop Loss:</b> ${f_short_sl:,.4f}
-
-----------------------------------
-💎 <b>SPOT / HOLDING SETUP:</b>
- ├ <b>Buy Zones:</b> ${spot_buy_1:,.4f} | ${spot_buy_2:,.4f}
- ├ <b>Targets:</b> ${spot_tp1:,.4f} (+8%) | ${spot_tp2:,.4f} (+15%) | ${spot_tp3:,.4f} (+25%)
- └ <b>Spot Stop Loss:</b> ${spot_sl:,.4f}
-
-----------------------------------
-🧠 <b>ALL INDICATORS &amp; CONFLUENCE:</b>
-• <b>AI Win Probability:</b> {win_prob}%
-• <b>RSI (14):</b> {rsi:.2f} ({'Oversold 🟢' if rsi < 30 else 'Overbought 🔴' if rsi > 70 else 'Neutral ⚖️'})
-• <b>Stoch RSI (K):</b> {stoch_k:.1f}
-• <b>VWAP:</b> ${vwap_val:,.4f} | <b>ATR (Volatility):</b> ${atr_val:,.4f}
-• <b>MACD Status:</b> {'Bullish Crossover 🟢' if macd_val > macd_sig else 'Bearish Crossover 🔴'}
-• <b>EMA 20 / SMA 50:</b> ${ema20:,.4f} / ${sma50:,.4f}
-• <b>Bollinger Upper/Lower:</b> ${upper_bb:,.4f} / ${lower_bb:,.4f}
-• <b>Volume Status:</b> {vol_status}
-• <b>Trend (15m / 1h / 1d):</b> {trend_15m} | {trend_1h} | {trend_1d}
-"""
-    return telegram_msg, coin.upper()
-
+# ==========================================
+# MAIN EXECUTION LOOP
+# ==========================================
 def main():
-    console.clear()
-    console.print(Panel("[bold cyan]🤖 CRYPTOPK AUTOMATED SIGNAL BOT (CRYPTO & METALS) 🤖[/bold cyan]", style="bold blue"))
+    print("🚀 Auto Signal Bot Started Successfully...")
     
-    sent_history = {}
-
     while True:
-        coins_to_scan = get_top_coins(100)
-        if not coins_to_scan:
-            console.print("[bold red]❌ Binance fetch error. Retrying in 30s...[/bold red]")
-            time.sleep(30)
+        all_pairs = get_all_usdt_pairs()
+        if not all_pairs:
+            print("[!] Unable to fetch market pairs. Retrying in 1 minute...")
+            time.sleep(60)
             continue
-
-        console.print(f"\n[bold yellow]🔄 [{time.strftime('%H:%M:%S')}] Auto-Scanning Cryptos, Gold (XAU) & Silver (XAG)...[/bold yellow]")
-
-        best_trades_count = 0
-        for idx, coin in enumerate(coins_to_scan, 1):
+            
+        current_batch = get_rotated_batch(all_pairs)
+        sent_count = 0
+        
+        for coin in current_batch:
             try:
                 res = analyze_and_filter(coin)
                 if res:
                     msg, coin_name = res
                     current_time = time.time()
                     
-                    if coin_name not in sent_history or (current_time - sent_history[coin_name]) > 10800:
+                    # Cooldown Check (10800 seconds = 3 Hours)
+                    if coin_name not in sent_history or (current_time - sent_history[coin_name]) > COOLDOWN_SECONDS:
                         sent = send_telegram_alert(msg)
                         if sent:
-                            best_trades_count += 1
+                            sent_count += 1
                             sent_history[coin_name] = current_time
-                            console.print(f"[bold green]🔥 [{time.strftime('%H:%M:%S')}] Signal Sent for #{coin_name}[/bold green]")
+                            print(f"✅ [Signal Sent] #{coin_name}")
                         else:
-                            console.print(f"[bold red]❌ Failed to send Telegram alert for #{coin_name}[/bold red]")
+                            print(f"❌ [Failed] Telegram delivery failed for #{coin_name}")
                     else:
-                        console.print(f"[dim yellow]⌛ #{coin_name} signal on cooldown[/dim yellow]")
+                        print(f"⏳ #{coin_name} on cooldown. Skipped.")
                 else:
-                    console.print(f"[dim gray]⏭️ [{idx}/{len(coins_to_scan)}] #{coin} skipped[/dim gray]")
-                time.sleep(1.2)
+                    print(f"⏩ #{coin} skipped (Score < 80% or Trend Mismatch)")
             except Exception as e:
-                console.print(f"[bold red]❌ Error scanning {coin}: {e}[/bold red]")
-                continue
-
-        console.print(f"\n[bold green]✅ Cycle Complete! Sent {best_trades_count} new signal(s). Sleeping 20 mins...[/bold green]")
-        time.sleep(900)
+                print(f"[!] Error analyzing #{coin}: {e}")
+            
+            time.sleep(1) # API Rate Limit Protection
+            
+        print(f"\n✅ Cycle Complete! Sent {sent_count} new high-accuracy signal(s). Sleeping 20 mins...\n")
+        time.sleep(1200) # 20 Minute Sleep Cycle
 
 if __name__ == "__main__":
     main()
