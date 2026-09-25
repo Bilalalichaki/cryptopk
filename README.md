@@ -31,4 +31,3 @@ An automated, high-precision trading signal engine built in Python, designed to 
 * **Time Zone:** Asia/Karachi (PKT)
 * **Cooldown Interval:** 3 Hours per coin
 * **Scoring Threshold:** Configurable AI Score filter for high-probability setups
-# cryptopk
