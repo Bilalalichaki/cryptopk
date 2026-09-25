@@ -36,18 +36,19 @@ PROXIES = None
 # Expanded High-Volume Watchlist (Crypto Top Coins + Gold)
 WATCHLIST = [
     # Top Crypto
-    'BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'BNBUSDT', 'XRPUSDT', 
+    'BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'BNBUSDT', 'XRPUSDT',
     'ADAUSDT', 'DOGEUSDT', 'AVAXUSDT', 'LINKUSDT', 'SUIUSDT',
     'NEARUSDT', 'APTUSDT', 'LTCUSDT', 'DOTUSDT', 'BCHUSDT',
-    
+
     # Specific Volatile & Trending Coins
-    'ZECUSDT', 'PEPEUSDT', 'SHIBUSDT', 'NEARUSDT', 'FETUSDT',
+    'ZECUSDT', 'PEPEUSDT', 'SHIBUSDT', 'FETUSDT',
     'RENDERUSDT', 'INJUSDT', 'TIAUSDT', 'TAOUSDT', 'SEIUSDT',
-    
+
     # Gold
     'PAXGUSDT', # Spot Gold
     'XAUUSDT'   # Futures Gold
 ]
+
 
 
 COOLDOWN_SECONDS = 10800  # 3 Hours
