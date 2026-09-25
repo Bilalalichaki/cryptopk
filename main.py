@@ -33,15 +33,22 @@ TELEGRAM_CHAT_ID = "-1004458934308"
 PROXIES = None
 
 # Specific Assets Watchlist
+# Expanded High-Volume Watchlist (Crypto Top Coins + Gold)
 WATCHLIST = [
-    'BTCUSDT', 
-    'ETHUSDT', 
-    'XRPUSDT', 
-    'PAXGUSDT', # XAU (Gold Spot)
-    'ZECUSDT',
-    'SOLUSDT',
-    'XAUUSDT'  # Gold Futures
+    # Top Crypto
+    'BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'BNBUSDT', 'XRPUSDT', 
+    'ADAUSDT', 'DOGEUSDT', 'AVAXUSDT', 'LINKUSDT', 'SUIUSDT',
+    'NEARUSDT', 'APTUSDT', 'LTCUSDT', 'DOTUSDT', 'BCHUSDT',
+    
+    # Specific Volatile & Trending Coins
+    'ZECUSDT', 'PEPEUSDT', 'SHIBUSDT', 'NEARUSDT', 'FETUSDT',
+    'RENDERUSDT', 'INJUSDT', 'TIAUSDT', 'TAOUSDT', 'SEIUSDT',
+    
+    # Gold
+    'PAXGUSDT', # Spot Gold
+    'XAUUSDT'   # Futures Gold
 ]
+
 
 COOLDOWN_SECONDS = 10800  # 3 Hours
 MIN_AI_SCORE = 80
