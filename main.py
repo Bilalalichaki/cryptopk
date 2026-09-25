@@ -14,13 +14,13 @@ app = Flask(__name__)
 
 @app.route('/')
 def home():
-    return "🚀 Crypto & Gold Signal Bot is Active 24/7 on Render!"
+    return "Crypto & Gold Signal Bot is Active 24/7 on Render!"
 
 def run_flask():
     port = int(os.environ.get("PORT", 10000))
     app.run(host='0.0.0.0', port=port)
 
-# Render Port Detect Karne Ke Liye Background Web Server Start
+# Background thread me Web Server start kar rahe hain taaki Render Live ho jaye
 Thread(target=run_flask, daemon=True).start()
 
 # ==========================================
@@ -29,7 +29,7 @@ Thread(target=run_flask, daemon=True).start()
 TELEGRAM_BOT_TOKEN = "8785813821:AAGR2kLZg6EKepSEtW5NoDs66tRqUaPIEP8"
 TELEGRAM_CHAT_ID = "-1004458934308"
 
-# Cloud platform par Direct Binance connection chalega (No local Tor proxy)
+# Cloud platform par direct internet connection use hota hai
 PROXIES = None
 
 # Specific Assets Watchlist
@@ -56,7 +56,7 @@ def get_pakistan_time():
     """Pakistan Local Time Return Karta Hai"""
     pkt = pytz.timezone('Asia/Karachi')
     now = datetime.now(pkt)
-    return now.strftime("%d-%m-%y  - %I:%M%p").lower()
+    return now.strftime("%d-%b-%Y | %I:%M %p")
 
 def fetch_klines(symbol, timeframe, limit=100):
     try:
@@ -128,32 +128,64 @@ def check_active_trade_results():
         
         current_price = df['close'].iloc[-1]
         pair_clean = symbol.replace('USDT', '')
-        if pair_clean in ['PAXG', 'XAU']: pair_clean = 'XAU'
+        if pair_clean in ['PAXG', 'XAU']: pair_clean = 'XAU / GOLD'
         
         direction = trade['direction']
         
         if direction == 'LONG':
             if current_price >= trade['tp2'] and not trade['tp2_hit']:
-                send_telegram_msg(f"🎯 **RESULT ALERT** 🎯\n\n**{pair_clean} / LONG**\n✅ **TP2 HIT:** `{trade['tp2']}` 🔥\n⏰ Time: {get_pakistan_time()}")
+                send_telegram_msg(
+                    f"🔥 **TARGET 2 HIT (FULL TP)** 🔥\n\n"
+                    f"📌 **Pair:** `{pair_clean}` | **LONG** 🟢\n"
+                    f"✅ **TP2 Price:** `{trade['tp2']}`\n"
+                    f"⏰ **Time:** `{get_pakistan_time()}`"
+                )
                 trade['tp2_hit'] = True
                 del active_trades[symbol]
             elif current_price >= trade['tp1'] and not trade['tp1_hit']:
-                send_telegram_msg(f"🎯 **RESULT ALERT** 🎯\n\n**{pair_clean} / LONG**\n✅ **TP1 HIT:** `{trade['tp1']}` 🚀\n⏰ Time: {get_pakistan_time()}")
+                send_telegram_msg(
+                    f"🚀 **TARGET 1 HIT** 🚀\n\n"
+                    f"📌 **Pair:** `{pair_clean}` | **LONG** 🟢\n"
+                    f"✅ **TP1 Price:** `{trade['tp1']}`\n"
+                    f"💡 *Lock profits or set SL to Entry!*\n"
+                    f"⏰ **Time:** `{get_pakistan_time()}`"
+                )
                 trade['tp1_hit'] = True
             elif current_price <= trade['sl']:
-                send_telegram_msg(f"🛑 **RESULT ALERT** 🛑\n\n**{pair_clean} / LONG**\n❌ **STOP LOSS HIT:** `{trade['sl']}`\n⏰ Time: {get_pakistan_time()}")
+                send_telegram_msg(
+                    f"🛑 **STOP LOSS HIT** 🛑\n\n"
+                    f"📌 **Pair:** `{pair_clean}` | **LONG** 🟢\n"
+                    f"❌ **SL Price:** `{trade['sl']}`\n"
+                    f"⏰ **Time:** `{get_pakistan_time()}`"
+                )
                 del active_trades[symbol]
                 
         elif direction == 'SHORT':
             if current_price <= trade['tp2'] and not trade['tp2_hit']:
-                send_telegram_msg(f"🎯 **RESULT ALERT** 🎯\n\n**{pair_clean} / SHORT**\n✅ **TP2 HIT:** `{trade['tp2']}` 🔥\n⏰ Time: {get_pakistan_time()}")
+                send_telegram_msg(
+                    f"🔥 **TARGET 2 HIT (FULL TP)** 🔥\n\n"
+                    f"📌 **Pair:** `{pair_clean}` | **SHORT** 🔴\n"
+                    f"✅ **TP2 Price:** `{trade['tp2']}`\n"
+                    f"⏰ **Time:** `{get_pakistan_time()}`"
+                )
                 trade['tp2_hit'] = True
                 del active_trades[symbol]
             elif current_price <= trade['tp1'] and not trade['tp1_hit']:
-                send_telegram_msg(f"🎯 **RESULT ALERT** 🎯\n\n**{pair_clean} / SHORT**\n✅ **TP1 HIT:** `{trade['tp1']}` 🚀\n⏰ Time: {get_pakistan_time()}")
+                send_telegram_msg(
+                    f"🚀 **TARGET 1 HIT** 🚀\n\n"
+                    f"📌 **Pair:** `{pair_clean}` | **SHORT** 🔴\n"
+                    f"✅ **TP1 Price:** `{trade['tp1']}`\n"
+                    f"💡 *Lock profits or set SL to Entry!*\n"
+                    f"⏰ **Time:** `{get_pakistan_time()}`"
+                )
                 trade['tp1_hit'] = True
             elif current_price >= trade['sl']:
-                send_telegram_msg(f"🛑 **RESULT ALERT** 🛑\n\n**{pair_clean} / SHORT**\n❌ **STOP LOSS HIT:** `{trade['sl']}`\n⏰ Time: {get_pakistan_time()}")
+                send_telegram_msg(
+                    f"🛑 **STOP LOSS HIT** 🛑\n\n"
+                    f"📌 **Pair:** `{pair_clean}` | **SHORT** 🔴\n"
+                    f"❌ **SL Price:** `{trade['sl']}`\n"
+                    f"⏰ **Time:** `{get_pakistan_time()}`"
+                )
                 del active_trades[symbol]
 
 # ==========================================
@@ -179,31 +211,37 @@ def analyze_and_build_signal(symbol):
         
     price = df_15m['close'].iloc[-1]
     
-    timeframe_type = "15m Scalp Trade" if score_15 >= score_1h else "1h Intra-Day Trade"
+    timeframe_type = "⚡ 15m Scalp Trade" if score_15 >= score_1h else "📈 1h Intra-Day Trade"
     
     if active_trend == "LONG":
+        badge = "🟢 **BUY / LONG SIGNAL** 🟢"
         sl = round(price * 0.985, 2)
         tp1 = round(price * 1.015, 2)
         tp2 = round(price * 1.030, 2)
     else:
+        badge = "🔴 **SELL / SHORT SIGNAL** 🔴"
         sl = round(price * 1.015, 2)
         tp1 = round(price * 0.985, 2)
         tp2 = round(price * 0.970, 2)
         
     pair_clean = symbol.replace('USDT', '')
-    if pair_clean in ['PAXG', 'XAU']: pair_clean = 'XAU'
+    if pair_clean in ['PAXG', 'XAU']: pair_clean = 'XAU / GOLD'
     
     pk_time = get_pakistan_time()
     
-    # Notebook Clean Format
+    # Ultra Clean & Bold UI Format
     msg = (
-        f"**{pair_clean} / {active_trend}**   `{pk_time}`\n\n"
-        f"**Ent** = `{price}`\n\n"
-        f"**SL** = `{sl}`\n\n"
-        f"**TP** = `{tp1}`\n\n"
-        f"**TP** = `{tp2}`\n\n"
-        f"**Detail**\n"
-        f"⏳ Timeframe: {timeframe_type}"
+        f"{badge}\n"
+        f"═══════════════════\n"
+        f"🪙 **ASSET:** `{pair_clean}`\n"
+        f"⏰ **TIME:** `{pk_time}`\n"
+        f"═══════════════════\n\n"
+        f"💵 **ENTRY:** `{price}`\n\n"
+        f"🎯 **TP 1:** `{tp1}`\n"
+        f"🎯 **TP 2:** `{tp2}`\n\n"
+        f"🛑 **STOP LOSS:** `{sl}`\n\n"
+        f"═══════════════════\n"
+        f"📊 **SETUP:** {timeframe_type}"
     )
     
     trade_data = {
@@ -223,7 +261,6 @@ def analyze_and_build_signal(symbol):
 # ==========================================
 def main():
     print("🚀 Custom Asset Signal & Result Tracker Started...")
-    send_telegram_msg("🚀 **Bot Successfully Online on Render Cloud 24/7!**")
 
     while True:
         # Step 1: Check active trades for TP/SL hits
