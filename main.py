@@ -1,8 +1,27 @@
+import os
 import time
 import requests
 import pandas as pd
 from datetime import datetime
 import pytz
+from threading import Thread
+from flask import Flask
+
+# ==========================================
+# 0. RENDER PORT BINDING (Flask Web Server)
+# ==========================================
+app = Flask(__name__)
+
+@app.route('/')
+def home():
+    return "🚀 Crypto & Gold Signal Bot is Active 24/7 on Render!"
+
+def run_flask():
+    port = int(os.environ.get("PORT", 10000))
+    app.run(host='0.0.0.0', port=port)
+
+# Render Port Detect Karne Ke Liye Background Web Server Start
+Thread(target=run_flask, daemon=True).start()
 
 # ==========================================
 # CONFIGURATION
@@ -10,10 +29,8 @@ import pytz
 TELEGRAM_BOT_TOKEN = "8785813821:AAGR2kLZg6EKepSEtW5NoDs66tRqUaPIEP8"
 TELEGRAM_CHAT_ID = "-1004458934308"
 
-PROXIES = {
-    'http': 'socks5h://127.0.0.1:9050',
-    'https': 'socks5h://127.0.0.1:9050'
-}
+# Cloud platform par Direct Binance connection chalega (No local Tor proxy)
+PROXIES = None
 
 # Specific Assets Watchlist
 WATCHLIST = [
@@ -206,6 +223,7 @@ def analyze_and_build_signal(symbol):
 # ==========================================
 def main():
     print("🚀 Custom Asset Signal & Result Tracker Started...")
+    send_telegram_msg("🚀 **Bot Successfully Online on Render Cloud 24/7!**")
 
     while True:
         # Step 1: Check active trades for TP/SL hits
