@@ -8,7 +8,6 @@ import pytz
 # CONFIGURATION
 # ==========================================
 TELEGRAM_BOT_TOKEN = "8785813821:AAGR2kLZg6EKepSEtW5NoDs66tRqUaPIEP8"
-
 TELEGRAM_CHAT_ID = "-1004458934308"
 
 PROXIES = {
@@ -16,17 +15,17 @@ PROXIES = {
     'https': 'socks5h://127.0.0.1:9050'
 }
 
-# Sirf inhi specific pairs par nazar rakhega
+# Specific Assets Only
 WATCHLIST = [
     'BTCUSDT', 
     'ETHUSDT', 
     'XRPUSDT', 
-    'PAXGUSDT', # XAU (Gold equivalent on Binance)
+    'PAXGUSDT', # XAU (Gold)
     'ZECUSDT'
 ]
 
 COOLDOWN_SECONDS = 10800  # 3 Hours
-MIN_AI_SCORE = 0
+MIN_AI_SCORE = 80
 
 sent_history = {}
 active_trades = {}  # Live price tracking for TP/SL alerts
@@ -90,7 +89,8 @@ def send_telegram_msg(msg):
     try:
         res = requests.post(url, json=payload, proxies=PROXIES, timeout=30)
         return res.status_code == 200
-    except Exception:
+    except Exception as e:
+        print(f"[!] Telegram Dispatch Failed: {e}")
         return False
 
 # ==========================================
@@ -142,10 +142,12 @@ def analyze_and_build_signal(symbol):
     score_15, trend_15 = analyze_tf(df_15m)
     score_1h, trend_1h = analyze_tf(df_1h)
     
-    if trend_15 == "NEUTRAL" or trend_15 != trend_1h:
+    # Fallback to single timeframe if 1h is neutral
+    active_trend = trend_15 if trend_15 != "NEUTRAL" else trend_1h
+    if active_trend == "NEUTRAL":
         return None
         
-    final_score = int((score_15 * 0.6) + (score_1h * 0.4))
+    final_score = max(score_15, score_1h)
     if final_score < MIN_AI_SCORE:
         return None
         
@@ -153,7 +155,7 @@ def analyze_and_build_signal(symbol):
     
     timeframe_type = "15m Scalp Trade" if score_15 >= score_1h else "1h Intra-Day Trade"
     
-    if trend_15 == "LONG":
+    if active_trend == "LONG":
         sl = round(price * 0.985, 2)
         tp1 = round(price * 1.015, 2)
         tp2 = round(price * 1.030, 2)
@@ -167,9 +169,9 @@ def analyze_and_build_signal(symbol):
     
     pk_time = get_pakistan_time()
     
-    # Exact Notebook Clean Format
+    # Notebook Clean Format
     msg = (
-        f"**{pair_clean} / {trend_15}**   `{pk_time}`\n\n"
+        f"**{pair_clean} / {active_trend}**   `{pk_time}`\n\n"
         f"**Ent** = `{price}`\n\n"
         f"**SL** = `{sl}`\n\n"
         f"**TP** = `{tp1}`\n\n"
@@ -179,7 +181,7 @@ def analyze_and_build_signal(symbol):
     )
     
     trade_data = {
-        'direction': trend_15,
+        'direction': active_trend,
         'entry': price,
         'sl': sl,
         'tp1': tp1,
@@ -195,11 +197,28 @@ def analyze_and_build_signal(symbol):
 # ==========================================
 def main():
     print("🚀 Custom Asset Signal & Result Tracker Started...")
+    
+    # SEND INSTANT INITIAL TEST MESSAGE
+    test_pk_time = get_pakistan_time()
+    test_msg = (
+        f"**BTC / LONG**   `{test_pk_time}`\n\n"
+        f"**Ent** = `81200`\n\n"
+        f"**SL** = `80000`\n\n"
+        f"**TP** = `82900`\n\n"
+        f"**TP** = `83600`\n\n"
+        f"**Detail**\n"
+        f"⏳ Timeframe: 15m Scalp Trade (SYSTEM ONLINE TEST)"
+    )
+    if send_telegram_msg(test_msg):
+        print("✅ Connection Test Alert sent to Telegram!")
+    else:
+        print("[!] Connection Test Alert failed. Check Bot Admin Permissions.")
+
     while True:
-        # Step 1: Check existing trades for TP/SL hits
+        # Step 1: Check active trades for TP/SL hits
         check_active_trade_results()
         
-        # Step 2: Scan watchlist for new signals
+        # Step 2: Scan watchlist
         for symbol in WATCHLIST:
             try:
                 res = analyze_and_build_signal(symbol)
@@ -212,11 +231,14 @@ def main():
                             sent_history[coin_name] = curr_time
                             active_trades[symbol] = trade_data
                             print(f"✅ Signal Sent for {coin_name}")
+                else:
+                    print(f"⏩ {symbol} scanned. Waiting for strong setup...")
             except Exception as e:
                 print(f"[!] Error on {symbol}: {e}")
             time.sleep(1)
             
-        time.sleep(300) # 5 Min Loop
+        print("⏳ Scan cycle complete. Sleeping 3 minutes...\n")
+        time.sleep(180)
 
 if __name__ == "__main__":
     main()
