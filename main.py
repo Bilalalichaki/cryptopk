@@ -7,8 +7,9 @@ import pytz
 # ==========================================
 # CONFIGURATION
 # ==========================================
-TELEGRAM_BOT_TOKEN = "YOUR_TELEGRAM_BOT_TOKEN"
-TELEGRAM_CHAT_ID = "YOUR_TELEGRAM_CHAT_ID"
+TELEGRAM_BOT_TOKEN = "8785813821:AAGR2kLZg6EKepSEtW5NoDs66tRqUaPIEP8"
+
+TELEGRAM_CHAT_ID = "-1004458934308"
 
 PROXIES = {
     'http': 'socks5h://127.0.0.1:9050',
