@@ -15,15 +15,15 @@ PROXIES = {
     'https': 'socks5h://127.0.0.1:9050'
 }
 
-# Specific Assets Only
+# Specific Assets Watchlist
 WATCHLIST = [
     'BTCUSDT', 
     'ETHUSDT', 
     'XRPUSDT', 
-    'PAXGUSDT', # XAU (Gold)
-    'ZECUSDT'
-'XAUUSDT'
-'SOLUSDT'
+    'PAXGUSDT', # XAU (Gold Spot)
+    'ZECUSDT',
+    'SOLUSDT',
+    'XAUUSDT'  # Gold Futures
 ]
 
 COOLDOWN_SECONDS = 10800  # 3 Hours
@@ -46,6 +46,11 @@ def fetch_klines(symbol, timeframe, limit=100):
         url = f"https://api.binance.com/api/v3/klines?symbol={symbol}&interval={timeframe}&limit={limit}"
         res = requests.get(url, proxies=PROXIES, timeout=10)
         data = res.json()
+        
+        # Check if response is error dict
+        if isinstance(data, dict):
+            return None
+            
         df = pd.DataFrame(data, columns=['time', 'open', 'high', 'low', 'close', 'volume', '_', '_', '_', '_', '_', '_'])
         df['close'] = df['close'].astype(float)
         df['high'] = df['high'].astype(float)
@@ -106,7 +111,7 @@ def check_active_trade_results():
         
         current_price = df['close'].iloc[-1]
         pair_clean = symbol.replace('USDT', '')
-        if pair_clean == 'PAXG': pair_clean = 'XAU'
+        if pair_clean in ['PAXG', 'XAU']: pair_clean = 'XAU'
         
         direction = trade['direction']
         
@@ -141,10 +146,12 @@ def analyze_and_build_signal(symbol):
     df_15m = fetch_klines(symbol, '15m')
     df_1h = fetch_klines(symbol, '1h')
     
+    if df_15m is None or df_1h is None:
+        return None
+
     score_15, trend_15 = analyze_tf(df_15m)
     score_1h, trend_1h = analyze_tf(df_1h)
     
-    # Fallback to single timeframe if 1h is neutral
     active_trend = trend_15 if trend_15 != "NEUTRAL" else trend_1h
     if active_trend == "NEUTRAL":
         return None
@@ -167,7 +174,7 @@ def analyze_and_build_signal(symbol):
         tp2 = round(price * 0.970, 2)
         
     pair_clean = symbol.replace('USDT', '')
-    if pair_clean == 'PAXG': pair_clean = 'XAU'
+    if pair_clean in ['PAXG', 'XAU']: pair_clean = 'XAU'
     
     pk_time = get_pakistan_time()
     
