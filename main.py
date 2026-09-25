@@ -197,22 +197,6 @@ def analyze_and_build_signal(symbol):
 # ==========================================
 def main():
     print("🚀 Custom Asset Signal & Result Tracker Started...")
-    
-    # SEND INSTANT INITIAL TEST MESSAGE
-    test_pk_time = get_pakistan_time()
-    test_msg = (
-        f"**BTC / LONG**   `{test_pk_time}`\n\n"
-        f"**Ent** = `81200`\n\n"
-        f"**SL** = `80000`\n\n"
-        f"**TP** = `82900`\n\n"
-        f"**TP** = `83600`\n\n"
-        f"**Detail**\n"
-        f"⏳ Timeframe: 15m Scalp Trade (SYSTEM ONLINE TEST)"
-    )
-    if send_telegram_msg(test_msg):
-        print("✅ Connection Test Alert sent to Telegram!")
-    else:
-        print("[!] Connection Test Alert failed. Check Bot Admin Permissions.")
 
     while True:
         # Step 1: Check active trades for TP/SL hits
