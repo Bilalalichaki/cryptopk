@@ -1,3 +1,4 @@
 requests
-rich
 pandas
+pytz
+PySocks
