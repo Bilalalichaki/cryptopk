@@ -198,6 +198,8 @@ def analyze_and_build_signal(symbol):
 
     score_15, trend_15 = analyze_tf(df_15m)
     score_1h, trend_1h = analyze_tf(df_1h)
+    print(f"🔍 Scanning {symbol}... 15m Score: {score_15}, 1h Score: {score_1h}")
+
     
     active_trend = trend_15 if trend_15 != "NEUTRAL" else trend_1h
     if active_trend == "NEUTRAL":
