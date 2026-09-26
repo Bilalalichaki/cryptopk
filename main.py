@@ -4,7 +4,7 @@ import requests
 import pandas as pd
 from datetime import datetime
 import pytz
-from threading import Thread
+import threading
 from flask import Flask
 
 # ==========================================
@@ -18,10 +18,7 @@ def home():
 
 def run_flask():
     port = int(os.environ.get("PORT", 10000))
-    app.run(host='0.0.0.0', port=port)
-
-# Background thread me Web Server start kar rahe hain taaki Render Live ho jaye
-Thread(target=run_flask, daemon=True).start()
+    app.run(host='0.0.0.0', port=port, use_reloader=False)
 
 # ==========================================
 # CONFIGURATION
@@ -29,11 +26,8 @@ Thread(target=run_flask, daemon=True).start()
 TELEGRAM_BOT_TOKEN = "8785813821:AAGR2kLZg6EKepSEtW5NoDs66tRqUaPIEP8"
 TELEGRAM_CHAT_ID = "-1004458934308"
 
-# Cloud platform par direct internet connection use hota hai
 PROXIES = None
 
-# Specific Assets Watchlist
-# Expanded High-Volume Watchlist (Crypto Top Coins + Gold)
 WATCHLIST = [
     # Top Crypto
     'BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'BNBUSDT', 'XRPUSDT',
@@ -48,8 +42,6 @@ WATCHLIST = [
     'PAXGUSDT', # Spot Gold
     'XAUUSDT'   # Futures Gold
 ]
-
-
 
 COOLDOWN_SECONDS = 10800  # 3 Hours
 MIN_AI_SCORE = 10
@@ -72,7 +64,6 @@ def fetch_klines(symbol, timeframe, limit=100):
         res = requests.get(url, proxies=PROXIES, timeout=10)
         data = res.json()
         
-        # Check if response is error dict
         if isinstance(data, dict):
             return None
             
@@ -129,7 +120,6 @@ def send_telegram_msg(msg):
 # TP / SL RESULT CHECKER
 # ==========================================
 def check_active_trade_results():
-    """Send kiye hue trades ki live updates check karta hai (TP1, TP2, SL)"""
     for symbol, trade in list(active_trades.items()):
         df = fetch_klines(symbol, '1m', limit=1)
         if df is None: continue
@@ -237,7 +227,6 @@ def analyze_and_build_signal(symbol):
     
     pk_time = get_pakistan_time()
     
-    # Ultra Clean & Bold UI Format
     msg = (
         f"{badge}\n"
         f"═══════════════════\n"
@@ -271,10 +260,8 @@ def main():
     print("🚀 Custom Asset Signal & Result Tracker Started...")
 
     while True:
-        # Step 1: Check active trades for TP/SL hits
         check_active_trade_results()
         
-        # Step 2: Scan watchlist
         for symbol in WATCHLIST:
             try:
                 res = analyze_and_build_signal(symbol)
@@ -296,22 +283,13 @@ def main():
         print("⏳ Scan cycle complete. Sleeping 3 minutes...\n")
         time.sleep(180)
 
-import threading
-
-def run_flask():
-    # Render PORT env variable use karega, warna auto free port bind karega
-    port = int(os.environ.get("PORT", 5000))
-    app.run(host='0.0.0.0', port=port)
-
 if __name__ == "__main__":
-    # Flask in background thread
-    t = threading.Thread(target=run_flask, daemon=True)
-    t.start()
+    # Flask ko single background thread me start karna
+    threading.Thread(target=run_flask, daemon=True).start()
     
+    # Main scanner loop start
     print("🚀 Bot Scanner Loop starting now...")
     try:
         main()
     except Exception as e:
         print(f"❌ Error in main loop: {e}")
-
-
