@@ -96,8 +96,8 @@ def analyze_tf(df):
     price = close.iloc[-1]
     bull, bear = 0, 0
     
-    if rsi.iloc[-1] < 38: bull += 50
-    elif rsi.iloc[-1] > 62: bear += 50
+    if rsi.iloc[-1] < 50: bull += 50
+    elif rsi.iloc[-1] > 50: bear += 50
     
     if price > ema20.iloc[-1] > sma50.iloc[-1]: bull += 50
     elif price < ema20.iloc[-1] < sma50.iloc[-1]: bear += 50
