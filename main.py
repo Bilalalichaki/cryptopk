@@ -8,14 +8,13 @@ import threading
 from flask import Flask
 
 # ==========================================
-# 0. RENDER PORT BINDING (Flask Web Server)
+# 0. FLASK SERVER FOR RENDER PORT BINDING
 # ==========================================
-
 app = Flask(__name__)
 
 @app.route('/')
-def home():
-    return "Crypto & Gold Signal Bot is Active 24/7 on Render!"
+def health_check():
+    return "Bot is running 24/7!", 200
 
 # ==========================================
 # CONFIGURATION
@@ -254,7 +253,7 @@ def analyze_and_build_signal(symbol):
 # ==========================================
 # MAIN LOOP
 # ==========================================
-def main():
+def main_loop():
     print("🚀 Custom Asset Signal & Result Tracker Started...")
 
     while True:
@@ -281,15 +280,9 @@ def main():
         print("⏳ Scan cycle complete. Sleeping 3 minutes...\n")
         time.sleep(180)
 
-def start_bot_background():
-    print("🚀 Bot Scanner Loop starting now via Gunicorn...")
-    try:
-        main()
-    except Exception as e:
-        print(f"❌ Error in main loop: {e}")
-
-# MAIN THREAD: Pehle saare functions (main wagera) load ho gaye, ab thread start hogi
-threading.Thread(target=start_bot_background, daemon=True).start()
+# Start background thread automatically when imported by Gunicorn
+scanner_thread = threading.Thread(target=main_loop, daemon=True)
+scanner_thread.start()
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 10000))
