@@ -10,15 +10,22 @@ from flask import Flask
 # ==========================================
 # 0. RENDER PORT BINDING (Flask Web Server)
 # ==========================================
+
 app = Flask(__name__)
 
 @app.route('/')
 def home():
     return "Crypto & Gold Signal Bot is Active 24/7 on Render!"
 
-def run_flask():
-    port = int(os.environ.get("PORT", 10000))
-    app.run(host='0.0.0.0', port=port, use_reloader=False)
+def start_bot_background():
+    print("🚀 Bot Scanner Loop starting now via Gunicorn...")
+    try:
+        main()
+    except Exception as e:
+        print(f"❌ Error in main loop: {e}")
+
+threading.Thread(target=start_bot_background, daemon=True).start()
+
 
 # ==========================================
 # CONFIGURATION
