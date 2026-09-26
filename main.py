@@ -19,8 +19,6 @@ app = Flask(__name__)
 
 # ==========================================
 # CONFIGURATION
-# GitHub pe sirf "xxxx" rehne do
-# Render Environment pe token/ID daalna hai
 # ==========================================
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "xxxx")
 TELEGRAM_CHAT_ID   = os.environ.get("TELEGRAM_CHAT_ID",   "xxxx")
@@ -40,9 +38,15 @@ WATCHLIST = [
 ]
 FUTURES_WATCHLIST = []
 
-COOLDOWN_SECONDS = 10800
-MIN_AI_SCORE     = 80
-SCAN_INTERVAL    = 180
+# ---- TIMING ----
+COOLDOWN_SECONDS     = 7200    # 2 hours
+SIGNAL_SCAN_INTERVAL = 300     # 5 min
+TP_SL_CHECK_INTERVAL = 30      # 30 sec
+MIN_AI_SCORE         = 80
+
+# ---- VOLUME FILTER ----
+VOLUME_FILTER_ENABLED = True    # True = volume filter on, False = off
+VOLUME_THRESHOLD      = 0.8     # 0.8 = average ka 80% se zyada hona chahiye
 
 sent_history  = {}
 active_trades = {}
@@ -88,11 +92,25 @@ def fetch_klines(symbol, timeframe, limit=100, futures=False):
         return None
 
 
+# ==========================================
+# TECHNICAL ANALYSIS (with Volume Filter)
+# ==========================================
 def analyze_tf(df):
     if df is None or len(df) < 50:
         return 0, "NEUTRAL"
 
-    close = df['close']
+    close  = df['close']
+    volume = df['volume']
+
+    # ---- VOLUME FILTER ----
+    if VOLUME_FILTER_ENABLED:
+        avg_volume = volume.rolling(20).mean().iloc[-1]
+        current_volume = volume.iloc[-1]
+        # Agar current volume average ka 80% se kam hai → weak, skip
+        if current_volume < (avg_volume * VOLUME_THRESHOLD):
+            return 0, "NEUTRAL"
+
+    # ---- RSI ----
     delta = close.diff()
     gain  = (delta.where(delta > 0, 0)).rolling(14).mean()
     loss  = (-delta.where(delta < 0, 0)).rolling(14).mean()
@@ -120,20 +138,30 @@ def analyze_tf(df):
     return 0, "NEUTRAL"
 
 
-def send_telegram_msg(msg):
+def send_telegram_msg(msg, reply_to=None):
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
-    payload = {'chat_id': TELEGRAM_CHAT_ID, 'text': msg, 'parse_mode': 'Markdown'}
+    payload = {
+        'chat_id': TELEGRAM_CHAT_ID,
+        'text': msg,
+        'parse_mode': 'Markdown'
+    }
+    if reply_to:
+        payload['reply_to_message_id'] = reply_to
+
     try:
         res = requests.post(url, json=payload, proxies=PROXIES, timeout=30)
         if res.status_code != 200:
             logger.error(f"[Telegram] {res.status_code}: {res.text[:200]}")
-            return False
-        return True
+            return None
+        return res.json().get('result', {}).get('message_id')
     except Exception as e:
         logger.error(f"[Telegram] Exception: {e}")
-        return False
+        return None
 
 
+# ==========================================
+# TP/SL CHECKER — HIGH/LOW + Last 3 Candles
+# ==========================================
 def check_active_trade_results():
     with state_lock:
         symbols = list(active_trades.keys())
@@ -144,11 +172,13 @@ def check_active_trade_results():
             continue
 
         is_futures = symbol in FUTURES_WATCHLIST
-        df = fetch_klines(symbol, '1m', limit=2, futures=is_futures)
+        df = fetch_klines(symbol, '1m', limit=5, futures=is_futures)
         if df is None:
             continue
 
-        price = df['close'].iloc[-1]
+        recent_high = df['high'].iloc[-3:].max()
+        recent_low  = df['low'].iloc[-3:].min()
+
         pair = symbol.replace('USDT', '')
         if pair in ['PAXG', 'XAU']:
             pair = 'XAU / GOLD'
@@ -156,59 +186,74 @@ def check_active_trade_results():
         d = trade['direction']
         remove = False
 
+        sig_time   = trade.get('signal_time', 'N/A')
+        sig_msg_id = trade.get('signal_message_id')
+
         if d == 'LONG':
-            if price >= trade['tp2'] and not trade['tp2_hit']:
+            if recent_high >= trade['tp2'] and not trade['tp2_hit']:
                 send_telegram_msg(
                     f"🔥 *TARGET 2 HIT (FULL TP)* 🔥\n\n"
                     f"📌 *Pair:* `{pair}` | *LONG* 🟢\n"
-                    f"✅ *TP2:* `{trade['tp2']}`\n"
-                    f"⏰ *Time:* `{get_pakistan_time()}`"
+                    f"✅ *TP2:* `{trade['tp2']}`\n\n"
+                    f"📅 *Signal Time:* `{sig_time}`\n"
+                    f"⏰ *Hit Time:* `{get_pakistan_time()}`",
+                    reply_to=sig_msg_id
                 )
                 trade['tp2_hit'] = True
                 remove = True
-            elif price >= trade['tp1'] and not trade['tp1_hit']:
+            elif recent_high >= trade['tp1'] and not trade['tp1_hit']:
                 send_telegram_msg(
                     f"🚀 *TARGET 1 HIT* 🚀\n\n"
                     f"📌 *Pair:* `{pair}` | *LONG* 🟢\n"
                     f"✅ *TP1:* `{trade['tp1']}`\n"
-                    f"💡 *Lock profits / move SL to entry*\n"
-                    f"⏰ *Time:* `{get_pakistan_time()}`"
+                    f"💡 *Lock profits / move SL to entry*\n\n"
+                    f"📅 *Signal Time:* `{sig_time}`\n"
+                    f"⏰ *Hit Time:* `{get_pakistan_time()}`",
+                    reply_to=sig_msg_id
                 )
                 trade['tp1_hit'] = True
-            elif price <= trade['sl']:
+            elif recent_low <= trade['sl']:
                 send_telegram_msg(
                     f"🛑 *STOP LOSS HIT* 🛑\n\n"
                     f"📌 *Pair:* `{pair}` | *LONG* 🟢\n"
-                    f"❌ *SL:* `{trade['sl']}`\n"
-                    f"⏰ *Time:* `{get_pakistan_time()}`"
+                    f"❌ *SL:* `{trade['sl']}`\n\n"
+                    f"📅 *Signal Time:* `{sig_time}`\n"
+                    f"⏰ *Hit Time:* `{get_pakistan_time()}`",
+                    reply_to=sig_msg_id
                 )
                 remove = True
 
         elif d == 'SHORT':
-            if price <= trade['tp2'] and not trade['tp2_hit']:
+            if recent_low <= trade['tp2'] and not trade['tp2_hit']:
                 send_telegram_msg(
                     f"🔥 *TARGET 2 HIT (FULL TP)* 🔥\n\n"
                     f"📌 *Pair:* `{pair}` | *SHORT* 🔴\n"
-                    f"✅ *TP2:* `{trade['tp2']}`\n"
-                    f"⏰ *Time:* `{get_pakistan_time()}`"
+                    f"✅ *TP2:* `{trade['tp2']}`\n\n"
+                    f"📅 *Signal Time:* `{sig_time}`\n"
+                    f"⏰ *Hit Time:* `{get_pakistan_time()}`",
+                    reply_to=sig_msg_id
                 )
                 trade['tp2_hit'] = True
                 remove = True
-            elif price <= trade['tp1'] and not trade['tp1_hit']:
+            elif recent_low <= trade['tp1'] and not trade['tp1_hit']:
                 send_telegram_msg(
                     f"🚀 *TARGET 1 HIT* 🚀\n\n"
                     f"📌 *Pair:* `{pair}` | *SHORT* 🔴\n"
                     f"✅ *TP1:* `{trade['tp1']}`\n"
-                    f"💡 *Lock profits / move SL to entry*\n"
-                    f"⏰ *Time:* `{get_pakistan_time()}`"
+                    f"💡 *Lock profits / move SL to entry*\n\n"
+                    f"📅 *Signal Time:* `{sig_time}`\n"
+                    f"⏰ *Hit Time:* `{get_pakistan_time()}`",
+                    reply_to=sig_msg_id
                 )
                 trade['tp1_hit'] = True
-            elif price >= trade['sl']:
+            elif recent_high >= trade['sl']:
                 send_telegram_msg(
                     f"🛑 *STOP LOSS HIT* 🛑\n\n"
                     f"📌 *Pair:* `{pair}` | *SHORT* 🔴\n"
-                    f"❌ *SL:* `{trade['sl']}`\n"
-                    f"⏰ *Time:* `{get_pakistan_time()}`"
+                    f"❌ *SL:* `{trade['sl']}`\n\n"
+                    f"📅 *Signal Time:* `{sig_time}`\n"
+                    f"⏰ *Hit Time:* `{get_pakistan_time()}`",
+                    reply_to=sig_msg_id
                 )
                 remove = True
 
@@ -280,48 +325,66 @@ def analyze_and_build_signal(symbol, is_futures=False):
         'tp1': tp1,
         'tp2': tp2,
         'tp1_hit': False,
-        'tp2_hit': False
+        'tp2_hit': False,
+        'signal_time': get_pakistan_time()
     }
+
+
+def scan_signals():
+    for symbol in WATCHLIST:
+        try:
+            res = analyze_and_build_signal(symbol, is_futures=False)
+            if res:
+                msg, coin, data = res
+                now = time.time()
+                if (now - sent_history.get(coin, 0)) > COOLDOWN_SECONDS:
+                    msg_id = send_telegram_msg(msg)
+                    if msg_id:
+                        data['signal_message_id'] = msg_id
+                        sent_history[coin] = now
+                        with state_lock:
+                            active_trades[symbol] = data
+                        logger.info(f"✅ Signal sent: {coin} (msg_id: {msg_id})")
+        except Exception as e:
+            logger.error(f"[Scan] {symbol}: {e}")
+
+    for symbol in FUTURES_WATCHLIST:
+        try:
+            res = analyze_and_build_signal(symbol, is_futures=True)
+            if res:
+                msg, coin, data = res
+                now = time.time()
+                if (now - sent_history.get(coin, 0)) > COOLDOWN_SECONDS:
+                    msg_id = send_telegram_msg(msg)
+                    if msg_id:
+                        data['signal_message_id'] = msg_id
+                        sent_history[coin] = now
+                        with state_lock:
+                            active_trades[symbol] = data
+                        logger.info(f"✅ Signal sent: {coin}")
+        except Exception as e:
+            logger.error(f"[Scan-Futures] {symbol}: {e}")
 
 
 def main_loop():
     logger.info("🚀 Signal Bot Started...")
+    logger.info(f"⏱️ Signal scan: {SIGNAL_SCAN_INTERVAL}s | TP/SL check: {TP_SL_CHECK_INTERVAL}s")
+    logger.info(f"📊 Volume filter: {'ON' if VOLUME_FILTER_ENABLED else 'OFF'} (threshold: {VOLUME_THRESHOLD})")
+
+    last_signal_scan = 0
+
     while True:
         try:
+            now = time.time()
             check_active_trade_results()
 
-            for symbol in WATCHLIST:
-                try:
-                    res = analyze_and_build_signal(symbol, is_futures=False)
-                    if res:
-                        msg, coin, data = res
-                        now = time.time()
-                        if (now - sent_history.get(coin, 0)) > COOLDOWN_SECONDS:
-                            if send_telegram_msg(msg):
-                                sent_history[coin] = now
-                                with state_lock:
-                                    active_trades[symbol] = data
-                                logger.info(f"✅ Signal sent: {coin}")
-                except Exception as e:
-                    logger.error(f"[Scan] {symbol}: {e}")
+            if (now - last_signal_scan) >= SIGNAL_SCAN_INTERVAL:
+                logger.info("🔍 Signal scan starting...")
+                scan_signals()
+                last_signal_scan = now
+                logger.info(f"✅ Scan done. Active: {len(active_trades)}")
 
-            for symbol in FUTURES_WATCHLIST:
-                try:
-                    res = analyze_and_build_signal(symbol, is_futures=True)
-                    if res:
-                        msg, coin, data = res
-                        now = time.time()
-                        if (now - sent_history.get(coin, 0)) > COOLDOWN_SECONDS:
-                            if send_telegram_msg(msg):
-                                sent_history[coin] = now
-                                with state_lock:
-                                    active_trades[symbol] = data
-                                logger.info(f"✅ Signal sent: {coin}")
-                except Exception as e:
-                    logger.error(f"[Scan-Futures] {symbol}: {e}")
-
-            logger.info(f"⏳ Cycle done. Active: {len(active_trades)} | Sleep {SCAN_INTERVAL}s")
-            time.sleep(SCAN_INTERVAL)
+            time.sleep(TP_SL_CHECK_INTERVAL)
 
         except Exception as e:
             logger.error(f"[MainLoop] {e}")
@@ -339,6 +402,11 @@ def status():
         "status": "alive",
         "active_trades": len(active_trades),
         "tracked_coins": len(sent_history),
+        "signal_scan_interval": SIGNAL_SCAN_INTERVAL,
+        "tp_sl_check_interval": TP_SL_CHECK_INTERVAL,
+        "cooldown": COOLDOWN_SECONDS,
+        "volume_filter": VOLUME_FILTER_ENABLED,
+        "volume_threshold": VOLUME_THRESHOLD,
         "time": get_pakistan_time()
     }, 200
 
