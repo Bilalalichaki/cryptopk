@@ -302,6 +302,15 @@ def run_flask():
     app.run(host='0.0.0.0', port=10000)
 
 if __name__ == "__main__":
-    threading.Thread(target=run_flask, daemon=True).start()
-    main()
+    # Flask ko background me chalayein
+    t = threading.Thread(target=run_flask, daemon=True)
+    t.start()
+    
+    # Check karein ke main() run ho raha hai ya crash
+    print("🚀 Bot Scanner Loop starting now...")
+    try:
+        main()
+    except Exception as e:
+        print(f"❌ Error in main loop: {e}")
+
 
