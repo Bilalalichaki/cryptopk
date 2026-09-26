@@ -299,10 +299,12 @@ def main():
 import threading
 
 def run_flask():
-    port = int(os.environ.get("PORT", 10000))
+    # Render PORT env variable use karega, warna auto free port bind karega
+    port = int(os.environ.get("PORT", 5000))
     app.run(host='0.0.0.0', port=port)
 
 if __name__ == "__main__":
+    # Flask in background thread
     t = threading.Thread(target=run_flask, daemon=True)
     t.start()
     
