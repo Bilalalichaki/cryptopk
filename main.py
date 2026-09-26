@@ -41,7 +41,7 @@ WATCHLIST = [
 FUTURES_WATCHLIST = []
 
 COOLDOWN_SECONDS = 10800
-MIN_AI_SCORE     = 60
+MIN_AI_SCORE     = 80
 SCAN_INTERVAL    = 180
 
 sent_history  = {}
@@ -264,7 +264,6 @@ def analyze_and_build_signal(symbol, is_futures=False):
         f"═══════════════════\n"
         f"🪙 *ASSET:* `{pair}`\n"
         f"⏰ *TIME:* `{get_pakistan_time()}`\n"
-        f"📊 *SCORE:* `{score}/100`\n"
         f"═══════════════════\n\n"
         f"💵 *ENTRY:* `{round_price(price)}`\n\n"
         f"🎯 *TP 1:* `{tp1}`\n"
