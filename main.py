@@ -24,6 +24,7 @@ def start_bot_background():
     except Exception as e:
         print(f"❌ Error in main loop: {e}")
 
+# Gunicorn / Direct start thread binding
 threading.Thread(target=start_bot_background, daemon=True).start()
 
 
@@ -207,7 +208,6 @@ def analyze_and_build_signal(symbol):
     score_1h, trend_1h = analyze_tf(df_1h)
     print(f"🔍 Scanning {symbol}... 15m Score: {score_15}, 1h Score: {score_1h}")
 
-    
     active_trend = trend_15 if trend_15 != "NEUTRAL" else trend_1h
     if active_trend == "NEUTRAL":
         return None
@@ -293,12 +293,5 @@ def main():
         time.sleep(180)
 
 if __name__ == "__main__":
-    # Flask ko single background thread me start karna
-    threading.Thread(target=run_flask, daemon=True).start()
-    
-    # Main scanner loop start
-    print("🚀 Bot Scanner Loop starting now...")
-    try:
-        main()
-    except Exception as e:
-        print(f"❌ Error in main loop: {e}")
+    port = int(os.environ.get("PORT", 10000))
+    app.run(host='0.0.0.0', port=port)
