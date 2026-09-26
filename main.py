@@ -17,17 +17,6 @@ app = Flask(__name__)
 def home():
     return "Crypto & Gold Signal Bot is Active 24/7 on Render!"
 
-def start_bot_background():
-    print("🚀 Bot Scanner Loop starting now via Gunicorn...")
-    try:
-        main()
-    except Exception as e:
-        print(f"❌ Error in main loop: {e}")
-
-# Gunicorn / Direct start thread binding
-threading.Thread(target=start_bot_background, daemon=True).start()
-
-
 # ==========================================
 # CONFIGURATION
 # ==========================================
@@ -291,6 +280,16 @@ def main():
             
         print("⏳ Scan cycle complete. Sleeping 3 minutes...\n")
         time.sleep(180)
+
+def start_bot_background():
+    print("🚀 Bot Scanner Loop starting now via Gunicorn...")
+    try:
+        main()
+    except Exception as e:
+        print(f"❌ Error in main loop: {e}")
+
+# MAIN THREAD: Pehle saare functions (main wagera) load ho gaye, ab thread start hogi
+threading.Thread(target=start_bot_background, daemon=True).start()
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 10000))
