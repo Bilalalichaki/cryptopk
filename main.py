@@ -296,5 +296,12 @@ def main():
         print("⏳ Scan cycle complete. Sleeping 3 minutes...\n")
         time.sleep(180)
 
+import threading
+
+def run_flask():
+    app.run(host='0.0.0.0', port=10000)
+
 if __name__ == "__main__":
+    threading.Thread(target=run_flask, daemon=True).start()
     main()
+
