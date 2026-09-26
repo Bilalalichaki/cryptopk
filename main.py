@@ -296,17 +296,17 @@ def main():
         print("⏳ Scan cycle complete. Sleeping 3 minutes...\n")
         time.sleep(180)
 
+import os
 import threading
 
 def run_flask():
-    app.run(host='0.0.0.0', port=10000)
+    port = int(os.environ.get("PORT", 10000))
+    app.run(host='0.0.0.0', port=port)
 
 if __name__ == "__main__":
-    # Flask ko background me chalayein
     t = threading.Thread(target=run_flask, daemon=True)
     t.start()
     
-    # Check karein ke main() run ho raha hai ya crash
     print("🚀 Bot Scanner Loop starting now...")
     try:
         main()
