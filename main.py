@@ -348,7 +348,7 @@ def analyze_and_build_signal(symbol, is_futures=False):
     msg = (
         f"{badge}\n"
         f"═══════════════════\n"
-        f"🪙 *ASSET:* `{pair}`\n"
+        f"🪙 *Coin:* `{pair}`\n"
         f"⏰ *TIME:* `{get_pakistan_time()}`\n"
         f"═══════════════════\n\n"
         f"💵 *ENTRY:* `{round_price(price)}`\n\n"
