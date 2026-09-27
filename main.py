@@ -44,9 +44,18 @@ SIGNAL_SCAN_INTERVAL = 300     # 5 min
 TP_SL_CHECK_INTERVAL = 30      # 30 sec
 MIN_AI_SCORE         = 80
 
-# ---- VOLUME FILTER ----
-VOLUME_FILTER_ENABLED = True    # True = volume filter on, False = off
-VOLUME_THRESHOLD      = 0.8     # 0.8 = average ka 80% se zyada hona chahiye
+# ---- FILTERS ----
+VOLUME_FILTER_ENABLED = True
+VOLUME_THRESHOLD      = 0.8
+
+TREND_FILTER_ENABLED  = True
+TREND_EMA_PERIOD      = 200
+
+# ---- SL / TP (RR RATIO FIXED) ----
+# Risk : Reward = 1 : 1.5 (TP1) aur 1 : 2.5 (TP2)
+SL_PERCENT  = 0.020   # 2.0% SL
+TP1_PERCENT = 0.030   # 3.0% TP1
+TP2_PERCENT = 0.050   # 5.0% TP2
 
 sent_history  = {}
 active_trades = {}
@@ -93,7 +102,7 @@ def fetch_klines(symbol, timeframe, limit=100, futures=False):
 
 
 # ==========================================
-# TECHNICAL ANALYSIS (with Volume Filter)
+# TECHNICAL ANALYSIS (Volume + Trend Filter)
 # ==========================================
 def analyze_tf(df):
     if df is None or len(df) < 50:
@@ -106,7 +115,6 @@ def analyze_tf(df):
     if VOLUME_FILTER_ENABLED:
         avg_volume = volume.rolling(20).mean().iloc[-1]
         current_volume = volume.iloc[-1]
-        # Agar current volume average ka 80% se kam hai → weak, skip
         if current_volume < (avg_volume * VOLUME_THRESHOLD):
             return 0, "NEUTRAL"
 
@@ -132,6 +140,21 @@ def analyze_tf(df):
     elif price > ema20.iloc[-1]:                    bull += 25
     elif price < ema20.iloc[-1] < sma50.iloc[-1]:  bear += 50
     elif price < ema20.iloc[-1]:                    bear += 25
+
+    # ---- TREND FILTER (EMA200) ----
+    if TREND_FILTER_ENABLED and len(close) >= TREND_EMA_PERIOD:
+        ema200 = close.ewm(span=TREND_EMA_PERIOD, adjust=False).mean().iloc[-1]
+        market_uptrend = price > ema200
+
+        if bull > bear:
+            if not market_uptrend:
+                return 0, "NEUTRAL"
+            return bull, "LONG"
+        elif bear > bull:
+            if market_uptrend:
+                return 0, "NEUTRAL"
+            return bear, "SHORT"
+        return 0, "NEUTRAL"
 
     if bull > bear:   return bull, "LONG"
     elif bear > bull: return bear, "SHORT"
@@ -160,7 +183,7 @@ def send_telegram_msg(msg, reply_to=None):
 
 
 # ==========================================
-# TP/SL CHECKER — HIGH/LOW + Last 3 Candles
+# TP/SL CHECKER — WITH SUCCESS MESSAGES
 # ==========================================
 def check_active_trade_results():
     with state_lock:
@@ -192,31 +215,40 @@ def check_active_trade_results():
         if d == 'LONG':
             if recent_high >= trade['tp2'] and not trade['tp2_hit']:
                 send_telegram_msg(
-                    f"🔥 *TARGET 2 HIT (FULL TP)* 🔥\n\n"
+                    f"✅ *SUCCESSFUL HIT — TARGET 2 (FULL TP)* ✅\n\n"
+                    f"🔥🔥🔥 *PERFECT TRADE!* 🔥🔥🔥\n\n"
                     f"📌 *Pair:* `{pair}` | *LONG* 🟢\n"
-                    f"✅ *TP2:* `{trade['tp2']}`\n\n"
+                    f"💰 *Entry:* `{trade['entry']}`\n"
+                    f"✅ *TP2:* `{trade['tp2']}`\n"
+                    f"📈 *Profit:* *+5.0%* 🎉\n\n"
                     f"📅 *Signal Time:* `{sig_time}`\n"
                     f"⏰ *Hit Time:* `{get_pakistan_time()}`",
                     reply_to=sig_msg_id
                 )
                 trade['tp2_hit'] = True
                 remove = True
+
             elif recent_high >= trade['tp1'] and not trade['tp1_hit']:
                 send_telegram_msg(
-                    f"🚀 *TARGET 1 HIT* 🚀\n\n"
+                    f"✅ *SUCCESSFUL HIT — TARGET 1* ✅\n\n"
+                    f"🎯 *TRADE IN PROFIT!*\n\n"
                     f"📌 *Pair:* `{pair}` | *LONG* 🟢\n"
+                    f"💰 *Entry:* `{trade['entry']}`\n"
                     f"✅ *TP1:* `{trade['tp1']}`\n"
-                    f"💡 *Lock profits / move SL to entry*\n\n"
+                    f"📈 *Profit:* *+3.0%* 💰\n\n"
+                    f"💡 *Move SL to entry — risk-free trade now!*\n\n"
                     f"📅 *Signal Time:* `{sig_time}`\n"
                     f"⏰ *Hit Time:* `{get_pakistan_time()}`",
                     reply_to=sig_msg_id
                 )
                 trade['tp1_hit'] = True
+
             elif recent_low <= trade['sl']:
                 send_telegram_msg(
                     f"🛑 *STOP LOSS HIT* 🛑\n\n"
                     f"📌 *Pair:* `{pair}` | *LONG* 🟢\n"
-                    f"❌ *SL:* `{trade['sl']}`\n\n"
+                    f"❌ *SL:* `{trade['sl']}`\n"
+                    f"📉 *Loss:* *-2.0%*\n\n"
                     f"📅 *Signal Time:* `{sig_time}`\n"
                     f"⏰ *Hit Time:* `{get_pakistan_time()}`",
                     reply_to=sig_msg_id
@@ -226,31 +258,40 @@ def check_active_trade_results():
         elif d == 'SHORT':
             if recent_low <= trade['tp2'] and not trade['tp2_hit']:
                 send_telegram_msg(
-                    f"🔥 *TARGET 2 HIT (FULL TP)* 🔥\n\n"
+                    f"✅ *SUCCESSFUL HIT — TARGET 2 (FULL TP)* ✅\n\n"
+                    f"🔥🔥🔥 *PERFECT TRADE!* 🔥🔥🔥\n\n"
                     f"📌 *Pair:* `{pair}` | *SHORT* 🔴\n"
-                    f"✅ *TP2:* `{trade['tp2']}`\n\n"
+                    f"💰 *Entry:* `{trade['entry']}`\n"
+                    f"✅ *TP2:* `{trade['tp2']}`\n"
+                    f"📈 *Profit:* *+5.0%* 🎉\n\n"
                     f"📅 *Signal Time:* `{sig_time}`\n"
                     f"⏰ *Hit Time:* `{get_pakistan_time()}`",
                     reply_to=sig_msg_id
                 )
                 trade['tp2_hit'] = True
                 remove = True
+
             elif recent_low <= trade['tp1'] and not trade['tp1_hit']:
                 send_telegram_msg(
-                    f"🚀 *TARGET 1 HIT* 🚀\n\n"
+                    f"✅ *SUCCESSFUL HIT — TARGET 1* ✅\n\n"
+                    f"🎯 *TRADE IN PROFIT!*\n\n"
                     f"📌 *Pair:* `{pair}` | *SHORT* 🔴\n"
+                    f"💰 *Entry:* `{trade['entry']}`\n"
                     f"✅ *TP1:* `{trade['tp1']}`\n"
-                    f"💡 *Lock profits / move SL to entry*\n\n"
+                    f"📈 *Profit:* *+3.0%* 💰\n\n"
+                    f"💡 *Move SL to entry — risk-free trade now!*\n\n"
                     f"📅 *Signal Time:* `{sig_time}`\n"
                     f"⏰ *Hit Time:* `{get_pakistan_time()}`",
                     reply_to=sig_msg_id
                 )
                 trade['tp1_hit'] = True
+
             elif recent_high >= trade['sl']:
                 send_telegram_msg(
                     f"🛑 *STOP LOSS HIT* 🛑\n\n"
                     f"📌 *Pair:* `{pair}` | *SHORT* 🔴\n"
-                    f"❌ *SL:* `{trade['sl']}`\n\n"
+                    f"❌ *SL:* `{trade['sl']}`\n"
+                    f"📉 *Loss:* *-2.0%*\n\n"
                     f"📅 *Signal Time:* `{sig_time}`\n"
                     f"⏰ *Hit Time:* `{get_pakistan_time()}`",
                     reply_to=sig_msg_id
@@ -291,14 +332,14 @@ def analyze_and_build_signal(symbol, is_futures=False):
 
     if trend == "LONG":
         badge = "🟢 *BUY / LONG SIGNAL* 🟢"
-        sl    = round_price(price * 0.985)
-        tp1   = round_price(price * 1.015)
-        tp2   = round_price(price * 1.030)
+        sl    = round_price(price * (1 - SL_PERCENT))
+        tp1   = round_price(price * (1 + TP1_PERCENT))
+        tp2   = round_price(price * (1 + TP2_PERCENT))
     else:
         badge = "🔴 *SELL / SHORT SIGNAL* 🔴"
-        sl    = round_price(price * 1.015)
-        tp1   = round_price(price * 0.985)
-        tp2   = round_price(price * 0.970)
+        sl    = round_price(price * (1 + SL_PERCENT))
+        tp1   = round_price(price * (1 - TP1_PERCENT))
+        tp2   = round_price(price * (1 - TP2_PERCENT))
 
     pair = symbol.replace('USDT', '')
     if pair in ['PAXG', 'XAU']:
@@ -311,9 +352,9 @@ def analyze_and_build_signal(symbol, is_futures=False):
         f"⏰ *TIME:* `{get_pakistan_time()}`\n"
         f"═══════════════════\n\n"
         f"💵 *ENTRY:* `{round_price(price)}`\n\n"
-        f"🎯 *TP 1:* `{tp1}`\n"
-        f"🎯 *TP 2:* `{tp2}`\n\n"
-        f"🛑 *STOP LOSS:* `{sl}`\n\n"
+        f"🎯 *TP 1:* `{tp1}`  _(+3.0%)_\n"
+        f"🎯 *TP 2:* `{tp2}`  _(+5.0%)_\n\n"
+        f"🛑 *STOP LOSS:* `{sl}`  _(-2.0%)_\n\n"
         f"═══════════════════\n"
         f"📈 *SETUP:* {label}"
     )
@@ -369,7 +410,9 @@ def scan_signals():
 def main_loop():
     logger.info("🚀 Signal Bot Started...")
     logger.info(f"⏱️ Signal scan: {SIGNAL_SCAN_INTERVAL}s | TP/SL check: {TP_SL_CHECK_INTERVAL}s")
-    logger.info(f"📊 Volume filter: {'ON' if VOLUME_FILTER_ENABLED else 'OFF'} (threshold: {VOLUME_THRESHOLD})")
+    logger.info(f"📊 Volume filter: {'ON' if VOLUME_FILTER_ENABLED else 'OFF'}")
+    logger.info(f"📈 Trend filter: {'ON' if TREND_FILTER_ENABLED else 'OFF'} (EMA{TREND_EMA_PERIOD})")
+    logger.info(f"💰 SL: {SL_PERCENT*100}% | TP1: {TP1_PERCENT*100}% | TP2: {TP2_PERCENT*100}%")
 
     last_signal_scan = 0
 
@@ -406,7 +449,10 @@ def status():
         "tp_sl_check_interval": TP_SL_CHECK_INTERVAL,
         "cooldown": COOLDOWN_SECONDS,
         "volume_filter": VOLUME_FILTER_ENABLED,
-        "volume_threshold": VOLUME_THRESHOLD,
+        "trend_filter": TREND_FILTER_ENABLED,
+        "sl_percent": SL_PERCENT,
+        "tp1_percent": TP1_PERCENT,
+        "tp2_percent": TP2_PERCENT,
         "time": get_pakistan_time()
     }, 200
 
