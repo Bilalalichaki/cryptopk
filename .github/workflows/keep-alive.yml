@@ -1,0 +1,16 @@
+name: Keep Render Alive
+
+on:
+  schedule:
+    - cron: '*/14 * * * *'
+  workflow_dispatch:
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ping Render Bot
+        run: |
+          echo "Pinging bot at $(date)"
+          curl -s https://cryptopk.onrender.com/ > /dev/null
+          echo "Ping successful!"
