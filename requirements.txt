@@ -1,6 +1,5 @@
 flask
 requests
 pandas
-pytz
 tzdata
 gunicorn
