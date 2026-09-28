@@ -1,6 +1,6 @@
+flask
 requests
 pandas
 pytz
-PySocks
-flask
+tzdata
 gunicorn
