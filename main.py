@@ -643,10 +643,3 @@ start_scanner_once()
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 10000))
     app.run(host='0.0.0.0', port=port, threaded=True)
-
-# Test admin message — ek baar bhejo
-def test_admin():
-    send_admin_msg("🧪 *TEST MESSAGE*\n\nBot aapko message bhej sakta hai ✅")
-    logger.info("🧪 Test message sent")
-
-test_admin()
