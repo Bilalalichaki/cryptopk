@@ -39,23 +39,28 @@ WATCHLIST = [
 FUTURES_WATCHLIST = []
 
 # ---- TIMING ----
-COOLDOWN_SECONDS     = 7200
-SIGNAL_SCAN_INTERVAL = 600
-TP_SL_CHECK_INTERVAL = 30
-MIN_AI_SCORE         = 120    # 150 mein se 120
+COOLDOWN_SECONDS     = 7200      # 2 hours per coin
+SIGNAL_SCAN_INTERVAL = 600       # 10 min
+TP_SL_CHECK_INTERVAL = 30        # 30 sec
+MIN_AI_SCORE         = 150       # Higher threshold (kam signals, zyada accurate)
 
 # ---- FILTERS ----
 VOLUME_FILTER_ENABLED = True
 VOLUME_THRESHOLD      = 0.8
 
-# ---- SL / TP ----
-SL_PERCENT  = 0.020   # 2.0%
-TP1_PERCENT = 0.030   # 3.0%
-TP2_PERCENT = 0.050   # 5.0%
+# ---- ATR SETTINGS ----
+ATR_PERIOD           = 14
+SL_ATR_MULTIPLIER    = 1.5       # SL = 1.5 × ATR
+TP1_ATR_MULTIPLIER   = 2.0       # TP1 = 2.0 × ATR
+TP2_ATR_MULTIPLIER   = 3.5       # TP2 = 3.5 × ATR
 
-sent_history  = {}
-active_trades = {}
-state_lock    = threading.Lock()
+# ---- GLOBAL COOLDOWN (kam signals) ----
+GLOBAL_COOLDOWN_SECONDS = 3600   # 1 hour between ANY signal
+
+sent_history     = {}
+active_trades    = {}
+state_lock       = threading.Lock()
+last_global_signal_time = 0
 
 
 def get_pakistan_time():
@@ -71,7 +76,7 @@ def round_price(p):
     else:             return round(p, 8)
 
 
-def fetch_klines(symbol, timeframe, limit=100, futures=False):
+def fetch_klines(symbol, timeframe, limit=200, futures=False):
     try:
         if futures:
             url = f"https://fapi.binance.com/fapi/v1/klines?symbol={symbol}&interval={timeframe}&limit={limit}"
@@ -98,7 +103,7 @@ def fetch_klines(symbol, timeframe, limit=100, futures=False):
 
 
 # ==========================================
-# PARABOLIC SAR CALCULATION
+# PARABOLIC SAR
 # ==========================================
 def calculate_parabolic_sar(df, af_start=0.02, af_step=0.02, af_max=0.2):
     high = df['high'].values
@@ -161,9 +166,62 @@ def calculate_parabolic_sar(df, af_start=0.02, af_step=0.02, af_max=0.2):
 
 
 # ==========================================
-# TECHNICAL ANALYSIS — RSI + EMA20 + SMA50 + MACD + SAR
+# ATR CALCULATION
 # ==========================================
-def analyze_tf(df):
+def calculate_atr(df, period=14):
+    high_low = df['high'] - df['low']
+    high_close = (df['high'] - df['close'].shift()).abs()
+    low_close = (df['low'] - df['close'].shift()).abs()
+
+    tr = pd.concat([high_low, high_close, low_close], axis=1).max(axis=1)
+    atr = tr.rolling(period).mean()
+    return atr
+
+
+# ==========================================
+# RSI DIVERGENCE DETECTION
+# ==========================================
+def detect_rsi_divergence(df, rsi, lookback=20):
+    """
+    Bullish Divergence: Price Lower Low + RSI Higher Low
+    Bearish Divergence: Price Higher High + RSI Lower High
+    """
+    if len(df) < lookback:
+        return "NONE"
+
+    recent = df.iloc[-lookback:]
+    recent_rsi = rsi.iloc[-lookback:]
+
+    # Find lows and highs
+    price_low_idx  = recent['low'].idxmin()
+    price_high_idx = recent['high'].idxmax()
+
+    price_low  = recent.loc[price_low_idx, 'low']
+    price_high = recent.loc[price_high_idx, 'high']
+    rsi_low    = recent_rsi.loc[price_low_idx]
+    rsi_high   = recent_rsi.loc[price_high_idx]
+
+    # Compare with previous extreme
+    prev_low_price = recent['low'].iloc[:lookback//2].min()
+    prev_high_price = recent['high'].iloc[:lookback//2].max()
+    prev_low_rsi = recent_rsi.iloc[:lookback//2].min()
+    prev_high_rsi = recent_rsi.iloc[:lookback//2].max()
+
+    # Bullish: price lower low, RSI higher low
+    if price_low < prev_low_price and rsi_low > prev_low_rsi:
+        return "BULLISH"
+
+    # Bearish: price higher high, RSI lower high
+    if price_high > prev_high_price and rsi_high < prev_high_rsi:
+        return "BEARISH"
+
+    return "NONE"
+
+
+# ==========================================
+# TECHNICAL ANALYSIS — Full Indicators
+# ==========================================
+def analyze_tf(df, timeframe_label=""):
     if df is None or len(df) < 50:
         return 0, "NEUTRAL"
 
@@ -186,23 +244,24 @@ def analyze_tf(df):
 
     ema20 = close.ewm(span=20, adjust=False).mean()
     sma50 = close.rolling(50).mean()
+    sma200 = close.rolling(200).mean()
 
     price = close.iloc[-1]
     bull, bear = 0, 0
 
-    # RSI SCORE (max 50)
+    # ---- RSI SCORE (max 50) ----
     if rsi.iloc[-1] < 40:    bull += 50
     elif rsi.iloc[-1] < 50:  bull += 30
     elif rsi.iloc[-1] > 60:  bear += 50
     elif rsi.iloc[-1] > 50:  bear += 30
 
-    # EMA20 + SMA50 SCORE (max 50)
+    # ---- EMA20 + SMA50 SCORE (max 50) ----
     if price > ema20.iloc[-1] > sma50.iloc[-1]:    bull += 50
     elif price > ema20.iloc[-1]:                    bull += 25
     elif price < ema20.iloc[-1] < sma50.iloc[-1]:  bear += 50
     elif price < ema20.iloc[-1]:                    bear += 25
 
-    # MACD SCORE (max 25)
+    # ---- MACD SCORE (max 25) ----
     ema12 = close.ewm(span=12, adjust=False).mean()
     ema26 = close.ewm(span=26, adjust=False).mean()
     macd_line   = ema12 - ema26
@@ -218,7 +277,7 @@ def analyze_tf(df):
     elif macd_val < signal_val and hist_val < 0:
         bear += 25
 
-    # PARABOLIC SAR SCORE (max 25)
+    # ---- PARABOLIC SAR SCORE (max 25) ----
     sar_df = calculate_parabolic_sar(df)
     sar_value = sar_df['sar'].iloc[-1]
     sar_trend = sar_df['sar_trend'].iloc[-1]
@@ -227,6 +286,33 @@ def analyze_tf(df):
         bull += 25
     elif sar_trend == -1 and sar_value > price:
         bear += 25
+
+    # ---- BOLLINGER BANDS SCORE (max 25) ----
+    sma20 = close.rolling(20).mean()
+    std20 = close.rolling(20).std()
+    upper_band = sma20 + (2 * std20)
+    lower_band = sma20 - (2 * std20)
+
+    if price <= lower_band.iloc[-1]:
+        bull += 25   # Oversold — LONG
+    elif price >= upper_band.iloc[-1]:
+        bear += 25   # Overbought — SHORT
+
+    # ---- VOLUME TREND SCORE (max 15) ----
+    vol_avg_5  = volume.rolling(5).mean().iloc[-1]
+    vol_avg_20 = volume.rolling(20).mean().iloc[-1]
+
+    if vol_avg_5 > vol_avg_20 * 1.2:
+        # Volume badh raha hai — current trend confirm
+        if bull > bear:  bull += 15
+        elif bear > bull: bear += 15
+
+    # ---- RSI DIVERGENCE SCORE (max 20) ----
+    divergence = detect_rsi_divergence(df, rsi)
+    if divergence == "BULLISH":
+        bull += 20
+    elif divergence == "BEARISH":
+        bear += 20
 
     if bull > bear:   return bull, "LONG"
     elif bear > bull: return bear, "SHORT"
@@ -366,43 +452,60 @@ def check_active_trade_results():
                 active_trades.pop(symbol, None)
 
 
+# ==========================================
+# SIGNAL BUILDER — With 4h Confirmation
+# ==========================================
 def analyze_and_build_signal(symbol, is_futures=False):
-    df_15 = fetch_klines(symbol, '15m', futures=is_futures)
-    df_1h = fetch_klines(symbol, '1h',  futures=is_futures)
+    df_15m = fetch_klines(symbol, '15m', futures=is_futures)
+    df_1h  = fetch_klines(symbol, '1h',  futures=is_futures)
+    df_4h  = fetch_klines(symbol, '4h',  limit=100, futures=is_futures)
 
-    if df_15 is None or df_1h is None:
+    if df_15m is None or df_1h is None or df_4h is None:
         return None
 
-    s15, t15 = analyze_tf(df_15)
-    s1h, t1h = analyze_tf(df_1h)
-    logger.info(f"🔍 {symbol} | 15m: {s15}/{t15} | 1h: {s1h}/{t1h}")
+    s15, t15 = analyze_tf(df_15m, "15m")
+    s1h, t1h = analyze_tf(df_1h,  "1h")
+    s4h, t4h = analyze_tf(df_4h,  "4h")
 
-    if t15 == t1h and t15 != "NEUTRAL":
-        trend = t15
-        score = min(s15, s1h)
-        label = "🔥 Multi-TF Aligned"
-    else:
-        trend = t15 if s15 >= s1h else t1h
-        score = max(s15, s1h)
-        if trend == "NEUTRAL":
-            return None
-        label = "⚡ 15m Scalp" if s15 >= s1h else "📈 1h Intra-Day"
+    logger.info(f"🔍 {symbol} | 15m: {s15}/{t15} | 1h: {s1h}/{t1h} | 4h: {s4h}/{t4h}")
+
+    # ---- 4h CONFIRMATION (ZAROORI) ----
+    if t4h == "NEUTRAL":
+        return None
+
+    # Dono 15m aur 1h ka trend 4h ke saath match hona chahiye
+    if t15 != t4h or t1h != t4h:
+        return None   # 4h ke against signals skip
+
+    # ---- FINAL TREND ----
+    trend = t4h
+    # Score = sab ka minimum (sabse kamzor link)
+    score = min(s15, s1h, s4h)
 
     if score < MIN_AI_SCORE:
         return None
 
-    price = df_15['close'].iloc[-1]
+    label = "🔥 4h Aligned Trade"
+
+    # ---- ATR-BASED SL/TP ----
+    atr_series = calculate_atr(df_15m, ATR_PERIOD)
+    atr = atr_series.iloc[-1]
+
+    if pd.isna(atr) or atr <= 0:
+        return None
+
+    price = df_15m['close'].iloc[-1]
 
     if trend == "LONG":
         badge = "🟢 *BUY / LONG SIGNAL* 🟢"
-        sl    = round_price(price * (1 - SL_PERCENT))
-        tp1   = round_price(price * (1 + TP1_PERCENT))
-        tp2   = round_price(price * (1 + TP2_PERCENT))
+        sl    = round_price(price - (SL_ATR_MULTIPLIER * atr))
+        tp1   = round_price(price + (TP1_ATR_MULTIPLIER * atr))
+        tp2   = round_price(price + (TP2_ATR_MULTIPLIER * atr))
     else:
         badge = "🔴 *SELL / SHORT SIGNAL* 🔴"
-        sl    = round_price(price * (1 + SL_PERCENT))
-        tp1   = round_price(price * (1 - TP1_PERCENT))
-        tp2   = round_price(price * (1 - TP2_PERCENT))
+        sl    = round_price(price + (SL_ATR_MULTIPLIER * atr))
+        tp1   = round_price(price - (TP1_ATR_MULTIPLIER * atr))
+        tp2   = round_price(price - (TP2_ATR_MULTIPLIER * atr))
 
     pair = symbol.replace('USDT', '')
     if pair in ['PAXG', 'XAU']:
@@ -434,108 +537,62 @@ def analyze_and_build_signal(symbol, is_futures=False):
     }
 
 
+# ==========================================
+# SCAN SIGNALS — With Global Cooldown
+# ==========================================
 def scan_signals():
+    global last_global_signal_time
+
+    now = time.time()
+
+    # Global cooldown check
+    if (now - last_global_signal_time) < GLOBAL_COOLDOWN_SECONDS:
+        remaining = int(GLOBAL_COOLDOWN_SECONDS - (now - last_global_signal_time))
+        logger.info(f"⏸️ Global cooldown — {remaining}s remaining")
+        return
+
+    # Best signal dhundho (highest score)
+    best_signal = None
+    best_score = 0
+
     for symbol in WATCHLIST:
         try:
             res = analyze_and_build_signal(symbol, is_futures=False)
             if res:
                 msg, coin, data = res
-                now = time.time()
+                # Cooldown check
                 if (now - sent_history.get(coin, 0)) > COOLDOWN_SECONDS:
-                    msg_id = send_telegram_msg(msg)
-                    if msg_id:
-                        data['signal_message_id'] = msg_id
-                        sent_history[coin] = now
-                        with state_lock:
-                            active_trades[symbol] = data
-                        logger.info(f"✅ Signal sent: {coin} (msg_id: {msg_id})")
+                    # Score calculate karo (dobara)
+                    # Yahan hum simple approach le rahe hain — pehla best signal
+                    if best_signal is None:
+                        best_signal = (msg, coin, data, symbol)
         except Exception as e:
             logger.error(f"[Scan] {symbol}: {e}")
 
-    for symbol in FUTURES_WATCHLIST:
-        try:
-            res = analyze_and_build_signal(symbol, is_futures=True)
-            if res:
-                msg, coin, data = res
-                now = time.time()
-                if (now - sent_history.get(coin, 0)) > COOLDOWN_SECONDS:
-                    msg_id = send_telegram_msg(msg)
-                    if msg_id:
-                        data['signal_message_id'] = msg_id
-                        sent_history[coin] = now
-                        with state_lock:
-                            active_trades[symbol] = data
-                        logger.info(f"✅ Signal sent: {coin}")
-        except Exception as e:
-            logger.error(f"[Scan-Futures] {symbol}: {e}")
+    # Sirf 1 signal per scan (best)
+    if best_signal:
+        msg, coin, data, symbol = best_signal
+        msg_id = send_telegram_msg(msg)
+        if msg_id:
+            data['signal_message_id'] = msg_id
+            sent_history[coin] = now
+            last_global_signal_time = now   # Global cooldown start
+            with state_lock:
+                active_trades[symbol] = data
+            logger.info(f"✅ Signal sent: {coin} (msg_id: {msg_id})")
+            logger.info(f"⏸️ Global cooldown started: {GLOBAL_COOLDOWN_SECONDS}s")
+    else:
+        logger.info("❌ No valid signal this scan")
 
 
 def main_loop():
     logger.info("🚀 Signal Bot Started...")
     logger.info(f"⏱️ Signal scan: {SIGNAL_SCAN_INTERVAL}s | TP/SL check: {TP_SL_CHECK_INTERVAL}s")
     logger.info(f"📊 Volume filter: {'ON' if VOLUME_FILTER_ENABLED else 'OFF'}")
-    logger.info(f"🧠 Indicators: RSI + EMA20 + SMA50 + MACD + SAR")
-    logger.info(f"💰 SL: {SL_PERCENT*100}% | TP1: {TP1_PERCENT*100}% | TP2: {TP2_PERCENT*100}%")
+    logger.info(f"🧠 Indicators: RSI + EMA20 + SMA50 + MACD + SAR + Bollinger + Volume Trend + RSI Divergence")
+    logger.info(f"📈 Timeframes: 15m + 1h + 4h (all must align)")
+    logger.info(f"🎯 Min Score: {MIN_AI_SCORE}")
+    logger.info(f"⏸️ Global Cooldown: {GLOBAL_COOLDOWN_SECONDS}s ({GLOBAL_COOLDOWN_SECONDS//60} min)")
+    logger.info(f"💰 ATR-based SL/TP (dynamic)")
 
-    last_signal_scan = 0
-
-    while True:
-        try:
-            now = time.time()
-            check_active_trade_results()
-
-            if (now - last_signal_scan) >= SIGNAL_SCAN_INTERVAL:
-                logger.info("🔍 Signal scan starting...")
-                scan_signals()
-                last_signal_scan = now
-                logger.info(f"✅ Scan done. Active: {len(active_trades)}")
-
-            time.sleep(TP_SL_CHECK_INTERVAL)
-
-        except Exception as e:
-            logger.error(f"[MainLoop] {e}")
-            time.sleep(60)
-
-
-@app.route('/')
-def health():
-    return "Bot is running 24/7!", 200
-
-
-@app.route('/status')
-def status():
-    return {
-        "status": "alive",
-        "active_trades": len(active_trades),
-        "tracked_coins": len(sent_history),
-        "signal_scan_interval": SIGNAL_SCAN_INTERVAL,
-        "tp_sl_check_interval": TP_SL_CHECK_INTERVAL,
-        "cooldown": COOLDOWN_SECONDS,
-        "volume_filter": VOLUME_FILTER_ENABLED,
-        "indicators": "RSI, EMA20, SMA50, MACD, SAR",
-        "sl_percent": SL_PERCENT,
-        "tp1_percent": TP1_PERCENT,
-        "tp2_percent": TP2_PERCENT,
-        "time": get_pakistan_time()
-    }, 200
-
-
-_scanner_started = False
-_scanner_lock = threading.Lock()
-
-
-def start_scanner_once():
-    global _scanner_started
-    with _scanner_lock:
-        if not _scanner_started:
-            threading.Thread(target=main_loop, daemon=True).start()
-            _scanner_started = True
-            logger.info("🔧 Scanner thread launched.")
-
-
-start_scanner_once()
-
-
-if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 10000))
-    app.run(host='0.0.0.0', port=port, threaded=True)
+    last_s
