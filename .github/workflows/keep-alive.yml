@@ -12,5 +12,5 @@ jobs:
       - name: Ping Render Bot
         run: |
           echo "Pinging bot at $(date)"
-          curl -s https://cryptopk.onrender.com/ > /dev/null
+          curl -s --max-time 60 https://cryptopk.onrender.com/ > /dev/null
           echo "Ping successful!"
