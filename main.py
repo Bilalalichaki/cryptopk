@@ -8,9 +8,6 @@ import threading
 import logging
 from flask import Flask
 
-# ==========================================
-# LOGGING SETUP
-# ==========================================
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s | %(levelname)s | %(message)s',
@@ -18,26 +15,17 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# ==========================================
-# FLASK APP
-# ==========================================
 app = Flask(__name__)
 
-# ==========================================
-# CONFIGURATION
-# ==========================================
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "xxxx")
-TELEGRAM_CHAT_ID   = os.environ.get("TELEGRAM_CHAT_ID",   "xxxx")   # Channel
-TELEGRAM_ADMIN_ID  = os.environ.get("TELEGRAM_ADMIN_ID",  "5846593253")   # Personal
+TELEGRAM_CHAT_ID   = os.environ.get("TELEGRAM_CHAT_ID",   "xxxx")
+TELEGRAM_ADMIN_ID  = os.environ.get("TELEGRAM_ADMIN_ID",  "5846593253")
 
 if TELEGRAM_BOT_TOKEN == "xxxx" or TELEGRAM_CHAT_ID == "xxxx":
     raise SystemExit("❌ Render pe TELEGRAM_BOT_TOKEN & TELEGRAM_CHAT_ID set karo!")
 
 PROXIES = None
 
-# ==========================================
-# WATCHLIST
-# ==========================================
 WATCHLIST = [
     'BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'BNBUSDT', 'XRPUSDT',
     'ADAUSDT', 'DOGEUSDT', 'AVAXUSDT', 'LINKUSDT', 'SUIUSDT',
@@ -48,36 +36,24 @@ WATCHLIST = [
 ]
 FUTURES_WATCHLIST = []
 
-# ==========================================
-# TIMING CONFIG
-# ==========================================
-COOLDOWN_SECONDS        = 7200      # 2 hours per coin
-SIGNAL_SCAN_INTERVAL    = 600       # 10 min
-TP_SL_CHECK_INTERVAL    = 30        # 30 sec
+COOLDOWN_SECONDS        = 7200
+SIGNAL_SCAN_INTERVAL    = 600
+TP_SL_CHECK_INTERVAL    = 30
 MIN_AI_SCORE            = 150
-GLOBAL_COOLDOWN_SECONDS = 3600      # 1 hour global
-DAILY_SUMMARY_HOUR      = 23        # 11 PM daily summary
+GLOBAL_COOLDOWN_SECONDS = 3600
+DAILY_SUMMARY_HOUR      = 23
 
-# ==========================================
-# FILTERS
-# ==========================================
 VOLUME_FILTER_ENABLED = True
 VOLUME_THRESHOLD      = 0.8
 
-# ==========================================
-# ATR SETTINGS
-# ==========================================
 ATR_PERIOD           = 14
 SL_ATR_MULTIPLIER    = 1.5
 TP1_ATR_MULTIPLIER   = 2.0
 TP2_ATR_MULTIPLIER   = 3.5
 
-# ==========================================
-# GLOBAL STATE
-# ==========================================
 sent_history            = {}
 active_trades           = {}
-trade_log               = []    # Har trade ka record
+trade_log               = []
 daily_stats             = {
     'date': None,
     'signals': 0,
@@ -91,9 +67,6 @@ last_global_signal_time = 0
 last_daily_summary_date = None
 
 
-# ==========================================
-# HELPER FUNCTIONS
-# ==========================================
 def get_pakistan_time():
     pkt = pytz.timezone('Asia/Karachi')
     return datetime.now(pkt).strftime("%d-%b-%Y | %I:%M %p")
@@ -123,14 +96,11 @@ def fetch_klines(symbol, timeframe, limit=200, futures=False):
             url = f"https://fapi.binance.com/fapi/v1/klines?symbol={symbol}&interval={timeframe}&limit={limit}"
         else:
             url = f"https://data-api.binance.vision/api/v3/klines?symbol={symbol}&interval={timeframe}&limit={limit}"
-
         res = requests.get(url, proxies=PROXIES, timeout=10)
         data = res.json()
-
         if isinstance(data, dict) or not data:
             logger.warning(f"[fetch_klines] Bad response {symbol}: {str(data)[:150]}")
             return None
-
         df = pd.DataFrame(data, columns=[
             'time', 'open', 'high', 'low', 'close', 'volume',
             '_1', '_2', '_3', '_4', '_5', '_6'
@@ -143,26 +113,19 @@ def fetch_klines(symbol, timeframe, limit=200, futures=False):
         return None
 
 
-# ==========================================
-# PARABOLIC SAR
-# ==========================================
 def calculate_parabolic_sar(df, af_start=0.02, af_step=0.02, af_max=0.2):
     high = df['high'].values
     low  = df['low'].values
     n    = len(df)
-
     sar   = [0.0] * n
     trend = [1] * n
     ep    = [0.0] * n
     af    = [af_start] * n
-
     sar[0]   = low[0]
     ep[0]    = high[0]
     trend[0] = 1
-
     for i in range(1, n):
         sar[i] = sar[i-1] + af[i-1] * (ep[i-1] - sar[i-1])
-
         if trend[i-1] == 1:
             if low[i] < sar[i]:
                 trend[i] = -1
@@ -199,16 +162,12 @@ def calculate_parabolic_sar(df, af_start=0.02, af_step=0.02, af_max=0.2):
                     sar[i] = max(sar[i], high[i-1], high[i-2])
                 elif i >= 1:
                     sar[i] = max(sar[i], high[i-1])
-
     df = df.copy()
     df['sar']       = sar
     df['sar_trend'] = trend
     return df
 
 
-# ==========================================
-# ATR
-# ==========================================
 def calculate_atr(df, period=14):
     high_low   = df['high'] - df['low']
     high_close = (df['high'] - df['close'].shift()).abs()
@@ -218,29 +177,21 @@ def calculate_atr(df, period=14):
     return atr
 
 
-# ==========================================
-# RSI DIVERGENCE
-# ==========================================
 def detect_rsi_divergence(df, rsi, lookback=20):
     if len(df) < lookback:
         return "NONE"
-
     recent     = df.iloc[-lookback:]
     recent_rsi = rsi.iloc[-lookback:]
-
     price_low_idx  = recent['low'].idxmin()
     price_high_idx = recent['high'].idxmax()
-
     price_low  = recent.loc[price_low_idx,  'low']
     price_high = recent.loc[price_high_idx, 'high']
     rsi_low    = recent_rsi.loc[price_low_idx]
     rsi_high   = recent_rsi.loc[price_high_idx]
-
     prev_low_price  = recent['low'].iloc[:lookback//2].min()
     prev_high_price = recent['high'].iloc[:lookback//2].max()
     prev_low_rsi    = recent_rsi.iloc[:lookback//2].min()
     prev_high_rsi   = recent_rsi.iloc[:lookback//2].max()
-
     if price_low < prev_low_price and rsi_low > prev_low_rsi:
         return "BULLISH"
     if price_high > prev_high_price and rsi_high < prev_high_rsi:
@@ -248,9 +199,6 @@ def detect_rsi_divergence(df, rsi, lookback=20):
     return "NONE"
 
 
-# ==========================================
-# TECHNICAL ANALYSIS
-# ==========================================
 def analyze_tf(df, timeframe_label=""):
     if df is None or len(df) < 50:
         return 0, "NEUTRAL"
@@ -276,19 +224,16 @@ def analyze_tf(df, timeframe_label=""):
     price      = close.iloc[-1]
     bull, bear = 0, 0
 
-    # RSI
     if rsi.iloc[-1] < 40:    bull += 50
     elif rsi.iloc[-1] < 50:  bull += 30
     elif rsi.iloc[-1] > 60:  bear += 50
     elif rsi.iloc[-1] > 50:  bear += 30
 
-    # EMA20 + SMA50
     if price > ema20.iloc[-1] > sma50.iloc[-1]:    bull += 50
     elif price > ema20.iloc[-1]:                    bull += 25
     elif price < ema20.iloc[-1] < sma50.iloc[-1]:  bear += 50
     elif price < ema20.iloc[-1]:                    bear += 25
 
-    # MACD
     ema12 = close.ewm(span=12, adjust=False).mean()
     ema26 = close.ewm(span=26, adjust=False).mean()
     macd_line   = ema12 - ema26
@@ -300,14 +245,12 @@ def analyze_tf(df, timeframe_label=""):
     elif macd_line.iloc[-1] < signal_line.iloc[-1] and histogram.iloc[-1] < 0:
         bear += 25
 
-    # SAR
     sar_df = calculate_parabolic_sar(df)
     if sar_df['sar_trend'].iloc[-1] == 1 and sar_df['sar'].iloc[-1] < price:
         bull += 25
     elif sar_df['sar_trend'].iloc[-1] == -1 and sar_df['sar'].iloc[-1] > price:
         bear += 25
 
-    # Bollinger
     sma20 = close.rolling(20).mean()
     std20 = close.rolling(20).std()
     if price <= (sma20 - 2*std20).iloc[-1]:
@@ -315,21 +258,28 @@ def analyze_tf(df, timeframe_label=""):
     elif price >= (sma20 + 2*std20).iloc[-1]:
         bear += 25
 
+    if volume.rolling(5).mean().iloc[-1] > volume.rolling(20).mean().iloc[-1] * 1.2:
+        if bull > bear:   bull += 15
+        elif bear > bull: bear += 15
 
-# ==========================================
-# TELEGRAM SENDER — Channel
-# ==========================================
+    divergence = detect_rsi_divergence(df, rsi)
+    if divergence == "BULLISH":
+        bull += 20
+    elif divergence == "BEARISH":
+        bear += 20
+
+    if bull > bear:
+        return bull, "LONG"
+    elif bear > bull:
+        return bear, "SHORT"
+    return 0, "NEUTRAL"
+
+
 def send_telegram_msg(msg, reply_to=None):
-    """Channel pe message bhejta hai."""
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
-    payload = {
-        'chat_id': TELEGRAM_CHAT_ID,
-        'text': msg,
-        'parse_mode': 'Markdown'
-    }
+    payload = {'chat_id': TELEGRAM_CHAT_ID, 'text': msg, 'parse_mode': 'Markdown'}
     if reply_to:
         payload['reply_to_message_id'] = reply_to
-
     try:
         res = requests.post(url, json=payload, proxies=PROXIES, timeout=30)
         if res.status_code != 200:
@@ -342,13 +292,8 @@ def send_telegram_msg(msg, reply_to=None):
 
 
 def send_admin_msg(msg):
-    """Aapke personal Telegram pe message bhejta hai."""
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
-    payload = {
-        'chat_id': TELEGRAM_ADMIN_ID,
-        'text': msg,
-        'parse_mode': 'Markdown'
-    }
+    payload = {'chat_id': TELEGRAM_ADMIN_ID, 'text': msg, 'parse_mode': 'Markdown'}
     try:
         res = requests.post(url, json=payload, proxies=PROXIES, timeout=30)
         if res.status_code != 200:
@@ -360,15 +305,10 @@ def send_admin_msg(msg):
         return None
 
 
-# ==========================================
-# STATS HELPER
-# ==========================================
 def reset_daily_stats_if_needed():
-    """Agar naya din hai to daily stats reset karo."""
     global daily_stats
     today = get_pakistan_date()
     if daily_stats.get('date') != today:
-        # Purane din ka summary save karo
         if daily_stats.get('date') is not None:
             save_day_to_log()
         daily_stats = {
@@ -382,7 +322,6 @@ def reset_daily_stats_if_needed():
 
 
 def save_day_to_log():
-    """Purane din ka data trade_log mein save karo."""
     global daily_stats
     if daily_stats.get('date'):
         trade_log.append(daily_stats.copy())
@@ -390,35 +329,24 @@ def save_day_to_log():
 
 
 def get_win_rate(stats=None):
-    """Win rate calculate karo."""
     if stats is None:
         stats = daily_stats
-
     total_closed = stats['tp1_hits'] + stats['tp2_hits'] + stats['sl_hits']
     if total_closed == 0:
         return 0, 0
-
-    wins  = stats['tp1_hits'] + stats['tp2_hits']
-    rate  = (wins / total_closed) * 100
+    wins = stats['tp1_hits'] + stats['tp2_hits']
+    rate = (wins / total_closed) * 100
     return round(rate, 1), total_closed
 
 
 def build_daily_summary():
-    """Daily summary ka message banao."""
     stats = daily_stats
     win_rate, total_closed = get_win_rate(stats)
-
-    if total_closed == 0:
-        emoji = "😐"
-    elif win_rate >= 70:
-        emoji = "🎉"
-    elif win_rate >= 60:
-        emoji = "✅"
-    elif win_rate >= 50:
-        emoji = "😊"
-    else:
-        emoji = "⚠️"
-
+    if total_closed == 0:     emoji = "😐"
+    elif win_rate >= 70:      emoji = "🎉"
+    elif win_rate >= 60:      emoji = "✅"
+    elif win_rate >= 50:      emoji = "😊"
+    else:                     emoji = "⚠️"
     msg = (
         f"📊 *DAILY SUMMARY — {stats['date']}*\n"
         f"═══════════════════════════════\n\n"
@@ -435,84 +363,28 @@ def build_daily_summary():
     return msg
 
 
-def build_stats_msg():
-    """Current stats ka message banao."""
-    stats = daily_stats
-    win_rate, total_closed = get_win_rate(stats)
-
-    # 7-day win rate
-    all_stats   = trade_log + [stats]
-    total_wins  = 0
-    total_loss  = 0
-    total_sigs  = 0
-
-    for s in all_stats:
-        total_wins += s['tp1_hits'] + s['tp2_hits']
-        total_loss += s['sl_hits']
-        total_sigs += s['signals']
-
-    if (total_wins + total_loss) > 0:
-        overall_wr = round((total_wins / (total_wins + total_loss)) * 100, 1)
-    else:
-        overall_wr = 0
-
-    msg = (
-        f"📊 *CURRENT STATS*\n"
-        f"═══════════════════════════════\n\n"
-        f"🔄 *Active Trades:* `{len(active_trades)}`\n"
-        f"📈 *Today's Signals:* `{stats['signals']}`\n\n"
-        f"📅 *Today ({stats['date']}):*\n"
-        f"   ✅ TP: `{stats['tp1_hits'] + stats['tp2_hits']}`\n"
-        f"   🛑 SL: `{stats['sl_hits']}`\n"
-        f"   🎯 Win Rate: `{win_rate}%`\n\n"
-        f"═══════════════════════════════\n"
-        f"📊 *Last 7 Days:*\n"
-        f"   Total Signals: `{total_sigs}`\n"
-        f"   Wins: `{total_wins}`\n"
-        f"   Losses: `{total_loss}`\n"
-        f"   🎯 Overall Win Rate: `{overall_wr}%`\n"
-        f"═══════════════════════════════"
-    )
-    return msg
-
-
-# ==========================================
-# TP / SL CHECKER
-# ==========================================
 def check_active_trade_results():
-    """
-    Har active trade ka TP/SL check karta hai.
-    Stats bhi update karta hai.
-    """
     global daily_stats
-
     with state_lock:
         symbols = list(active_trades.keys())
-
     for symbol in symbols:
         trade = active_trades.get(symbol)
         if trade is None:
             continue
-
         is_futures = symbol in FUTURES_WATCHLIST
         df = fetch_klines(symbol, '1m', limit=5, futures=is_futures)
         if df is None:
             continue
-
         recent_high = df['high'].iloc[-3:].max()
         recent_low  = df['low'].iloc[-3:].min()
-
         pair = symbol.replace('USDT', '')
         if pair in ['PAXG', 'XAU']:
             pair = 'XAU / GOLD'
-
         d = trade['direction']
         remove = False
-
         sig_time   = trade.get('signal_time', 'N/A')
         sig_msg_id = trade.get('signal_message_id')
 
-        # ========== LONG ==========
         if d == 'LONG':
             if recent_high >= trade['tp2'] and not trade['tp2_hit']:
                 send_telegram_msg(
@@ -528,7 +400,6 @@ def check_active_trade_results():
                 trade['tp2_hit'] = True
                 daily_stats['tp2_hits'] += 1
                 remove = True
-
             elif recent_high >= trade['tp1'] and not trade['tp1_hit']:
                 send_telegram_msg(
                     f"✅ *SUCCESSFUL HIT — TARGET 1* ✅\n\n"
@@ -543,7 +414,6 @@ def check_active_trade_results():
                 )
                 trade['tp1_hit'] = True
                 daily_stats['tp1_hits'] += 1
-
             elif recent_low <= trade['sl']:
                 send_telegram_msg(
                     f"🛑 *STOP LOSS HIT* 🛑\n\n"
@@ -556,7 +426,6 @@ def check_active_trade_results():
                 daily_stats['sl_hits'] += 1
                 remove = True
 
-        # ========== SHORT ==========
         elif d == 'SHORT':
             if recent_low <= trade['tp2'] and not trade['tp2_hit']:
                 send_telegram_msg(
@@ -572,7 +441,6 @@ def check_active_trade_results():
                 trade['tp2_hit'] = True
                 daily_stats['tp2_hits'] += 1
                 remove = True
-
             elif recent_low <= trade['tp1'] and not trade['tp1_hit']:
                 send_telegram_msg(
                     f"✅ *SUCCESSFUL HIT — TARGET 1* ✅\n\n"
@@ -587,7 +455,6 @@ def check_active_trade_results():
                 )
                 trade['tp1_hit'] = True
                 daily_stats['tp1_hits'] += 1
-
             elif recent_high >= trade['sl']:
                 send_telegram_msg(
                     f"🛑 *STOP LOSS HIT* 🛑\n\n"
@@ -607,42 +474,29 @@ def check_active_trade_results():
                     daily_stats['pending'] -= 1
 
 
-# ==========================================
-# SIGNAL BUILDER
-# ==========================================
 def analyze_and_build_signal(symbol, is_futures=False):
     df_15m = fetch_klines(symbol, '15m', futures=is_futures)
     df_1h  = fetch_klines(symbol, '1h',  futures=is_futures)
     df_4h  = fetch_klines(symbol, '4h',  limit=100, futures=is_futures)
-
     if df_15m is None or df_1h is None or df_4h is None:
         return None
-
     s15, t15 = analyze_tf(df_15m, "15m")
     s1h, t1h = analyze_tf(df_1h,  "1h")
     s4h, t4h = analyze_tf(df_4h,  "4h")
-
     logger.info(f"🔍 {symbol} | 15m: {s15}/{t15} | 1h: {s1h}/{t1h} | 4h: {s4h}/{t4h}")
-
     if t4h == "NEUTRAL":
         return None
     if t15 != t4h or t1h != t4h:
         return None
-
     trend = t4h
     score = min(s15, s1h, s4h)
-
     if score < MIN_AI_SCORE:
         return None
-
     atr_series = calculate_atr(df_15m, ATR_PERIOD)
     atr        = atr_series.iloc[-1]
-
     if pd.isna(atr) or atr <= 0:
         return None
-
     price = df_15m['close'].iloc[-1]
-
     if trend == "LONG":
         badge = "🟢 *BUY / LONG SIGNAL* 🟢"
         sl    = round_price(price - (SL_ATR_MULTIPLIER  * atr))
@@ -653,11 +507,9 @@ def analyze_and_build_signal(symbol, is_futures=False):
         sl    = round_price(price + (SL_ATR_MULTIPLIER  * atr))
         tp1   = round_price(price - (TP1_ATR_MULTIPLIER * atr))
         tp2   = round_price(price - (TP2_ATR_MULTIPLIER * atr))
-
     pair = symbol.replace('USDT', '')
     if pair in ['PAXG', 'XAU']:
         pair = 'XAU / GOLD'
-
     msg = (
         f"{badge}\n"
         f"═══════════════════\n"
@@ -671,7 +523,6 @@ def analyze_and_build_signal(symbol, is_futures=False):
         f"═══════════════════\n"
         f"📈 *SETUP:* 🔥 4h Aligned Trade"
     )
-
     return msg, pair, {
         'direction': trend,
         'entry': price,
@@ -684,25 +535,18 @@ def analyze_and_build_signal(symbol, is_futures=False):
     }
 
 
-# ==========================================
-# SCAN SIGNALS
-# ==========================================
 def scan_signals():
     global last_global_signal_time, daily_stats
-
     now = time.time()
-
     if (now - last_global_signal_time) < GLOBAL_COOLDOWN_SECONDS:
         remaining = int(GLOBAL_COOLDOWN_SECONDS - (now - last_global_signal_time))
         logger.info(f"⏸️ Global cooldown — {remaining}s remaining")
         return
-
     for symbol in WATCHLIST:
         try:
             res = analyze_and_build_signal(symbol, is_futures=False)
             if res:
                 msg, coin, data = res
-
                 if (now - sent_history.get(coin, 0)) > COOLDOWN_SECONDS:
                     msg_id = send_telegram_msg(msg)
                     if msg_id:
@@ -714,73 +558,45 @@ def scan_signals():
                         daily_stats['signals'] += 1
                         daily_stats['pending'] += 1
                         logger.info(f"✅ Signal sent: {coin} (msg_id: {msg_id})")
-                        logger.info(f"⏸️ Global cooldown started")
                         return
         except Exception as e:
             logger.error(f"[Scan] {symbol}: {e}")
-
     logger.info("❌ No valid signal this scan")
 
 
-# ==========================================
-# DAILY SUMMARY SENDER
-# ==========================================
 def send_daily_summary():
-    """Raat 11 baje daily summary bhejo."""
     summary_msg = build_daily_summary()
     send_admin_msg(summary_msg)
     logger.info("📊 Daily summary sent")
 
 
-# ==========================================
-# MAIN LOOP
-# ==========================================
 def main_loop():
     global last_daily_summary_date, daily_stats
-
     logger.info("🚀 Signal Bot Started...")
     logger.info(f"📢 Channel: {TELEGRAM_CHAT_ID}")
     logger.info(f"👤 Admin: {TELEGRAM_ADMIN_ID}")
-    logger.info(f"⏱️ Signal scan: {SIGNAL_SCAN_INTERVAL}s | TP/SL: {TP_SL_CHECK_INTERVAL}s")
-    logger.info(f"🎯 Min Score: {MIN_AI_SCORE}")
-    logger.info(f"📈 Timeframes: 15m + 1h + 4h")
-
     last_signal_scan = 0
-
     while True:
         try:
             now = time.time()
-
-            # Daily stats reset check
             reset_daily_stats_if_needed()
-
-            # TP/SL check — har 30 sec
             check_active_trade_results()
-
-            # Signal scan — har 10 min
             if (now - last_signal_scan) >= SIGNAL_SCAN_INTERVAL:
                 logger.info("🔍 Signal scan starting...")
                 scan_signals()
                 last_signal_scan = now
                 logger.info(f"✅ Scan done. Active: {len(active_trades)}")
-
-            # Daily summary — 11 PM pe
             current_date = get_pakistan_date()
             current_hour = get_pakistan_hour()
             if current_hour == DAILY_SUMMARY_HOUR and last_daily_summary_date != current_date:
                 send_daily_summary()
                 last_daily_summary_date = current_date
-
             time.sleep(TP_SL_CHECK_INTERVAL)
-
         except Exception as e:
             logger.error(f"[MainLoop] {e}")
             time.sleep(60)
 
 
-# ==========================================
-# FLASK ROUTES
-# ==========================================
 @app.route('/')
 def health():
     return "Bot is running 24/7!", 200
@@ -808,9 +624,6 @@ def stats_route():
     }, 200
 
 
-# ==========================================
-# THREAD GUARD
-# ==========================================
 _scanner_started = False
 _scanner_lock    = threading.Lock()
 
@@ -827,25 +640,6 @@ def start_scanner_once():
 start_scanner_once()
 
 
-# ==========================================
-# MAIN
-# ==========================================
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 10000))
     app.run(host='0.0.0.0', port=port, threaded=True)
-    # Volume Trend
-    if volume.rolling(5).mean().iloc[-1] > volume.rolling(20).mean().iloc[-1] * 1.2:
-        if bull > bear:   bull += 15
-        elif bear > bull: bear += 15
-
-    # RSI Divergence
-    divergence = detect_rsi_divergence(df, rsi)
-    if divergence == "BULLISH":
-        bull += 20
-    elif divergence == "BEARISH":
-        bear += 20
-
-    if bull > bear:   return bull, "LONG"
-    elif bear > bull: return bear, "SHORT"
-    return 0, "NEUTRAL"
-
