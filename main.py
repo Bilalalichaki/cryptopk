@@ -51,8 +51,7 @@ VOLUME_THRESHOLD      = 0.8
 TREND_FILTER_ENABLED  = True
 TREND_EMA_PERIOD      = 200
 
-# ---- SL / TP (RR RATIO FIXED) ----
-# Risk : Reward = 1 : 1.5 (TP1) aur 1 : 2.5 (TP2)
+# ---- SL / TP ----
 SL_PERCENT  = 0.020   # 2.0% SL
 TP1_PERCENT = 0.030   # 3.0% TP1
 TP2_PERCENT = 0.050   # 5.0% TP2
@@ -111,14 +110,12 @@ def analyze_tf(df):
     close  = df['close']
     volume = df['volume']
 
-    # ---- VOLUME FILTER ----
     if VOLUME_FILTER_ENABLED:
         avg_volume = volume.rolling(20).mean().iloc[-1]
         current_volume = volume.iloc[-1]
         if current_volume < (avg_volume * VOLUME_THRESHOLD):
             return 0, "NEUTRAL"
 
-    # ---- RSI ----
     delta = close.diff()
     gain  = (delta.where(delta > 0, 0)).rolling(14).mean()
     loss  = (-delta.where(delta < 0, 0)).rolling(14).mean()
@@ -141,7 +138,6 @@ def analyze_tf(df):
     elif price < ema20.iloc[-1] < sma50.iloc[-1]:  bear += 50
     elif price < ema20.iloc[-1]:                    bear += 25
 
-    # ---- TREND FILTER (EMA200) ----
     if TREND_FILTER_ENABLED and len(close) >= TREND_EMA_PERIOD:
         ema200 = close.ewm(span=TREND_EMA_PERIOD, adjust=False).mean().iloc[-1]
         market_uptrend = price > ema200
@@ -183,7 +179,7 @@ def send_telegram_msg(msg, reply_to=None):
 
 
 # ==========================================
-# TP/SL CHECKER — WITH SUCCESS MESSAGES
+# TP/SL CHECKER — Bina % / Profit
 # ==========================================
 def check_active_trade_results():
     with state_lock:
@@ -219,8 +215,7 @@ def check_active_trade_results():
                     f"🔥🔥🔥 *PERFECT TRADE!* 🔥🔥🔥\n\n"
                     f"📌 *Pair:* `{pair}` | *LONG* 🟢\n"
                     f"💰 *Entry:* `{trade['entry']}`\n"
-                    f"✅ *TP2:* `{trade['tp2']}`\n"
-                    f"📈 *Profit:* *+5.0%* 🎉\n\n"
+                    f"✅ *TP2:* `{trade['tp2']}`\n\n"
                     f"📅 *Signal Time:* `{sig_time}`\n"
                     f"⏰ *Hit Time:* `{get_pakistan_time()}`",
                     reply_to=sig_msg_id
@@ -234,8 +229,7 @@ def check_active_trade_results():
                     f"🎯 *TRADE IN PROFIT!*\n\n"
                     f"📌 *Pair:* `{pair}` | *LONG* 🟢\n"
                     f"💰 *Entry:* `{trade['entry']}`\n"
-                    f"✅ *TP1:* `{trade['tp1']}`\n"
-                    f"📈 *Profit:* *+3.0%* 💰\n\n"
+                    f"✅ *TP1:* `{trade['tp1']}`\n\n"
                     f"💡 *Move SL to entry — risk-free trade now!*\n\n"
                     f"📅 *Signal Time:* `{sig_time}`\n"
                     f"⏰ *Hit Time:* `{get_pakistan_time()}`",
@@ -247,8 +241,7 @@ def check_active_trade_results():
                 send_telegram_msg(
                     f"🛑 *STOP LOSS HIT* 🛑\n\n"
                     f"📌 *Pair:* `{pair}` | *LONG* 🟢\n"
-                    f"❌ *SL:* `{trade['sl']}`\n"
-                    f"📉 *Loss:* *-2.0%*\n\n"
+                    f"❌ *SL:* `{trade['sl']}`\n\n"
                     f"📅 *Signal Time:* `{sig_time}`\n"
                     f"⏰ *Hit Time:* `{get_pakistan_time()}`",
                     reply_to=sig_msg_id
@@ -262,8 +255,7 @@ def check_active_trade_results():
                     f"🔥🔥🔥 *PERFECT TRADE!* 🔥🔥🔥\n\n"
                     f"📌 *Pair:* `{pair}` | *SHORT* 🔴\n"
                     f"💰 *Entry:* `{trade['entry']}`\n"
-                    f"✅ *TP2:* `{trade['tp2']}`\n"
-                    f"📈 *Profit:* *+5.0%* 🎉\n\n"
+                    f"✅ *TP2:* `{trade['tp2']}`\n\n"
                     f"📅 *Signal Time:* `{sig_time}`\n"
                     f"⏰ *Hit Time:* `{get_pakistan_time()}`",
                     reply_to=sig_msg_id
@@ -277,8 +269,7 @@ def check_active_trade_results():
                     f"🎯 *TRADE IN PROFIT!*\n\n"
                     f"📌 *Pair:* `{pair}` | *SHORT* 🔴\n"
                     f"💰 *Entry:* `{trade['entry']}`\n"
-                    f"✅ *TP1:* `{trade['tp1']}`\n"
-                    f"📈 *Profit:* *+3.0%* 💰\n\n"
+                    f"✅ *TP1:* `{trade['tp1']}`\n\n"
                     f"💡 *Move SL to entry — risk-free trade now!*\n\n"
                     f"📅 *Signal Time:* `{sig_time}`\n"
                     f"⏰ *Hit Time:* `{get_pakistan_time()}`",
@@ -290,8 +281,7 @@ def check_active_trade_results():
                 send_telegram_msg(
                     f"🛑 *STOP LOSS HIT* 🛑\n\n"
                     f"📌 *Pair:* `{pair}` | *SHORT* 🔴\n"
-                    f"❌ *SL:* `{trade['sl']}`\n"
-                    f"📉 *Loss:* *-2.0%*\n\n"
+                    f"❌ *SL:* `{trade['sl']}`\n\n"
                     f"📅 *Signal Time:* `{sig_time}`\n"
                     f"⏰ *Hit Time:* `{get_pakistan_time()}`",
                     reply_to=sig_msg_id
@@ -348,13 +338,13 @@ def analyze_and_build_signal(symbol, is_futures=False):
     msg = (
         f"{badge}\n"
         f"═══════════════════\n"
-        f"🪙 *Coin:* `{pair}`\n"
+        f"🪙 *COIN:* `{pair}`\n"
         f"⏰ *TIME:* `{get_pakistan_time()}`\n"
         f"═══════════════════\n\n"
         f"💵 *ENTRY:* `{round_price(price)}`\n\n"
-        f"🎯 *TP 1:* `{tp1}`  _(+3.0%)_\n"
-        f"🎯 *TP 2:* `{tp2}`  _(+5.0%)_\n\n"
-        f"🛑 *STOP LOSS:* `{sl}`  _(-2.0%)_\n\n"
+        f"🎯 *TP 1:* `{tp1}`\n"
+        f"🎯 *TP 2:* `{tp2}`\n\n"
+        f"🛑 *STOP LOSS:* `{sl}`\n\n"
         f"═══════════════════\n"
         f"📈 *SETUP:* {label}"
     )
