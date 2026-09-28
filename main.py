@@ -584,7 +584,6 @@ def scan_signals():
     else:
         logger.info("❌ No valid signal this scan")
 
-
 def main_loop():
     logger.info("🚀 Signal Bot Started...")
     logger.info(f"⏱️ Signal scan: {SIGNAL_SCAN_INTERVAL}s | TP/SL check: {TP_SL_CHECK_INTERVAL}s")
@@ -595,4 +594,64 @@ def main_loop():
     logger.info(f"⏸️ Global Cooldown: {GLOBAL_COOLDOWN_SECONDS}s ({GLOBAL_COOLDOWN_SECONDS//60} min)")
     logger.info(f"💰 ATR-based SL/TP (dynamic)")
 
-    last_s
+    last_signal_scan = 0
+
+    while True:
+        try:
+            now = time.time()
+            check_active_trade_results()
+
+            if (now - last_signal_scan) >= SIGNAL_SCAN_INTERVAL:
+                logger.info("🔍 Signal scan starting...")
+                scan_signals()
+                last_signal_scan = now
+                logger.info(f"✅ Scan done. Active: {len(active_trades)}")
+
+            time.sleep(TP_SL_CHECK_INTERVAL)
+
+        except Exception as e:
+            logger.error(f"[MainLoop] {e}")
+            time.sleep(60)
+
+
+@app.route('/')
+def health():
+    return "Bot is running 24/7!", 200
+
+
+@app.route('/status')
+def status():
+    return {
+        "status": "alive",
+        "active_trades": len(active_trades),
+        "tracked_coins": len(sent_history),
+        "signal_scan_interval": SIGNAL_SCAN_INTERVAL,
+        "tp_sl_check_interval": TP_SL_CHECK_INTERVAL,
+        "global_cooldown": GLOBAL_COOLDOWN_SECONDS,
+        "min_score": MIN_AI_SCORE,
+        "indicators": "RSI, EMA20, SMA50, MACD, SAR, Bollinger, Volume Trend, RSI Divergence",
+        "timeframes": "15m, 1h, 4h",
+        "time": get_pakistan_time()
+    }, 200
+
+
+_scanner_started = False
+_scanner_lock = threading.Lock()
+
+
+def start_scanner_once():
+    global _scanner_started
+    with _scanner_lock:
+        if not _scanner_started:
+            threading.Thread(target=main_loop, daemon=True).start()
+            _scanner_started = True
+            logger.info("🔧 Scanner thread launched.")
+
+
+start_scanner_once()
+
+
+if __name__ == "__main__":
+    port = int(os.environ.get("PORT", 10000))
+    app.run(host='0.0.0.0', port=port, threaded=True)
+   
