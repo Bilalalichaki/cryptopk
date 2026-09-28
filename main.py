@@ -46,7 +46,7 @@ MIN_AI_SCORE         = 120    # 150 mein se 120
 
 # ---- FILTERS ----
 VOLUME_FILTER_ENABLED = True
-VOLUME_THRESHOLD      = 1.0
+VOLUME_THRESHOLD      = 0.8
 
 # ---- SL / TP ----
 SL_PERCENT  = 0.020   # 2.0%
