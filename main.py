@@ -34,27 +34,24 @@ WATCHLIST = [
     'NEARUSDT', 'APTUSDT', 'LTCUSDT', 'DOTUSDT', 'BCHUSDT',
     'ZECUSDT', 'PEPEUSDT', 'SHIBUSDT', 'FETUSDT',
     'RENDERUSDT', 'INJUSDT', 'TIAUSDT', 'TAOUSDT', 'SEIUSDT',
-    'PAXGUSDT',
+    'PAXGUSDT','ICPUSDT',
 ]
 FUTURES_WATCHLIST = []
 
 # ---- TIMING ----
-COOLDOWN_SECONDS     = 7200    # 2 hours
-SIGNAL_SCAN_INTERVAL = 300     # 5 min
-TP_SL_CHECK_INTERVAL = 30      # 30 sec
-MIN_AI_SCORE         = 80
+COOLDOWN_SECONDS     = 7200
+SIGNAL_SCAN_INTERVAL = 300
+TP_SL_CHECK_INTERVAL = 30
+MIN_AI_SCORE         = 120    # 150 mein se 120
 
 # ---- FILTERS ----
 VOLUME_FILTER_ENABLED = True
-VOLUME_THRESHOLD      = 0.8
-
-TREND_FILTER_ENABLED  = True
-TREND_EMA_PERIOD      = 200
+VOLUME_THRESHOLD      = 1.0
 
 # ---- SL / TP ----
-SL_PERCENT  = 0.020   # 2.0% SL
-TP1_PERCENT = 0.030   # 3.0% TP1
-TP2_PERCENT = 0.050   # 5.0% TP2
+SL_PERCENT  = 0.020   # 2.0%
+TP1_PERCENT = 0.030   # 3.0%
+TP2_PERCENT = 0.050   # 5.0%
 
 sent_history  = {}
 active_trades = {}
@@ -101,7 +98,70 @@ def fetch_klines(symbol, timeframe, limit=100, futures=False):
 
 
 # ==========================================
-# TECHNICAL ANALYSIS (Volume + Trend Filter)
+# PARABOLIC SAR CALCULATION
+# ==========================================
+def calculate_parabolic_sar(df, af_start=0.02, af_step=0.02, af_max=0.2):
+    high = df['high'].values
+    low  = df['low'].values
+    n = len(df)
+
+    sar = [0.0] * n
+    trend = [1] * n
+    ep = [0.0] * n
+    af = [af_start] * n
+
+    sar[0] = low[0]
+    ep[0] = high[0]
+    trend[0] = 1
+
+    for i in range(1, n):
+        sar[i] = sar[i-1] + af[i-1] * (ep[i-1] - sar[i-1])
+
+        if trend[i-1] == 1:
+            if low[i] < sar[i]:
+                trend[i] = -1
+                sar[i] = ep[i-1]
+                ep[i] = low[i]
+                af[i] = af_start
+            else:
+                trend[i] = 1
+                if high[i] > ep[i-1]:
+                    ep[i] = high[i]
+                    af[i] = min(af[i-1] + af_step, af_max)
+                else:
+                    ep[i] = ep[i-1]
+                    af[i] = af[i-1]
+                if i >= 2:
+                    sar[i] = min(sar[i], low[i-1], low[i-2])
+                elif i >= 1:
+                    sar[i] = min(sar[i], low[i-1])
+        else:
+            if high[i] > sar[i]:
+                trend[i] = 1
+                sar[i] = ep[i-1]
+                ep[i] = high[i]
+                af[i] = af_start
+            else:
+                trend[i] = -1
+                if low[i] < ep[i-1]:
+                    ep[i] = low[i]
+                    af[i] = min(af[i-1] + af_step, af_max)
+                else:
+                    ep[i] = ep[i-1]
+                    af[i] = af[i-1]
+                if i >= 2:
+                    sar[i] = max(sar[i], high[i-1], high[i-2])
+                elif i >= 1:
+                    sar[i] = max(sar[i], high[i-1])
+
+    df = df.copy()
+    df['sar'] = sar
+    df['sar_trend'] = trend
+    return df
+
+
+# ==========================================
+# TECHNICAL ANALYSIS — RSI + EMA20 + SMA50 + MACD + SAR
 # ==========================================
 def analyze_tf(df):
     if df is None or len(df) < 50:
@@ -110,12 +170,14 @@ def analyze_tf(df):
     close  = df['close']
     volume = df['volume']
 
+    # ---- VOLUME FILTER ----
     if VOLUME_FILTER_ENABLED:
         avg_volume = volume.rolling(20).mean().iloc[-1]
         current_volume = volume.iloc[-1]
         if current_volume < (avg_volume * VOLUME_THRESHOLD):
             return 0, "NEUTRAL"
 
+    # ---- RSI ----
     delta = close.diff()
     gain  = (delta.where(delta > 0, 0)).rolling(14).mean()
     loss  = (-delta.where(delta < 0, 0)).rolling(14).mean()
@@ -128,29 +190,43 @@ def analyze_tf(df):
     price = close.iloc[-1]
     bull, bear = 0, 0
 
+    # RSI SCORE (max 50)
     if rsi.iloc[-1] < 40:    bull += 50
     elif rsi.iloc[-1] < 50:  bull += 30
     elif rsi.iloc[-1] > 60:  bear += 50
     elif rsi.iloc[-1] > 50:  bear += 30
 
+    # EMA20 + SMA50 SCORE (max 50)
     if price > ema20.iloc[-1] > sma50.iloc[-1]:    bull += 50
     elif price > ema20.iloc[-1]:                    bull += 25
     elif price < ema20.iloc[-1] < sma50.iloc[-1]:  bear += 50
     elif price < ema20.iloc[-1]:                    bear += 25
 
-    if TREND_FILTER_ENABLED and len(close) >= TREND_EMA_PERIOD:
-        ema200 = close.ewm(span=TREND_EMA_PERIOD, adjust=False).mean().iloc[-1]
-        market_uptrend = price > ema200
+    # MACD SCORE (max 25)
+    ema12 = close.ewm(span=12, adjust=False).mean()
+    ema26 = close.ewm(span=26, adjust=False).mean()
+    macd_line   = ema12 - ema26
+    signal_line = macd_line.ewm(span=9, adjust=False).mean()
+    histogram   = macd_line - signal_line
 
-        if bull > bear:
-            if not market_uptrend:
-                return 0, "NEUTRAL"
-            return bull, "LONG"
-        elif bear > bull:
-            if market_uptrend:
-                return 0, "NEUTRAL"
-            return bear, "SHORT"
-        return 0, "NEUTRAL"
+    macd_val   = macd_line.iloc[-1]
+    signal_val = signal_line.iloc[-1]
+    hist_val   = histogram.iloc[-1]
+
+    if macd_val > signal_val and hist_val > 0:
+        bull += 25
+    elif macd_val < signal_val and hist_val < 0:
+        bear += 25
+
+    # PARABOLIC SAR SCORE (max 25)
+    sar_df = calculate_parabolic_sar(df)
+    sar_value = sar_df['sar'].iloc[-1]
+    sar_trend = sar_df['sar_trend'].iloc[-1]
+
+    if sar_trend == 1 and sar_value < price:
+        bull += 25
+    elif sar_trend == -1 and sar_value > price:
+        bear += 25
 
     if bull > bear:   return bull, "LONG"
     elif bear > bull: return bear, "SHORT"
@@ -178,9 +254,6 @@ def send_telegram_msg(msg, reply_to=None):
         return None
 
 
-# ==========================================
-# TP/SL CHECKER — Bina % / Profit
-# ==========================================
 def check_active_trade_results():
     with state_lock:
         symbols = list(active_trades.keys())
@@ -401,7 +474,7 @@ def main_loop():
     logger.info("🚀 Signal Bot Started...")
     logger.info(f"⏱️ Signal scan: {SIGNAL_SCAN_INTERVAL}s | TP/SL check: {TP_SL_CHECK_INTERVAL}s")
     logger.info(f"📊 Volume filter: {'ON' if VOLUME_FILTER_ENABLED else 'OFF'}")
-    logger.info(f"📈 Trend filter: {'ON' if TREND_FILTER_ENABLED else 'OFF'} (EMA{TREND_EMA_PERIOD})")
+    logger.info(f"🧠 Indicators: RSI + EMA20 + SMA50 + MACD + SAR")
     logger.info(f"💰 SL: {SL_PERCENT*100}% | TP1: {TP1_PERCENT*100}% | TP2: {TP2_PERCENT*100}%")
 
     last_signal_scan = 0
@@ -439,7 +512,7 @@ def status():
         "tp_sl_check_interval": TP_SL_CHECK_INTERVAL,
         "cooldown": COOLDOWN_SECONDS,
         "volume_filter": VOLUME_FILTER_ENABLED,
-        "trend_filter": TREND_FILTER_ENABLED,
+        "indicators": "RSI, EMA20, SMA50, MACD, SAR",
         "sl_percent": SL_PERCENT,
         "tp1_percent": TP1_PERCENT,
         "tp2_percent": TP2_PERCENT,
