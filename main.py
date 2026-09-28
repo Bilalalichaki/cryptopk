@@ -3,7 +3,7 @@ import time
 import requests
 import pandas as pd
 from datetime import datetime, timedelta
-import pytz
+from zoneinfo import ZoneInfo
 import threading
 import logging
 from flask import Flask
@@ -67,20 +67,20 @@ last_global_signal_time = 0
 last_daily_summary_date = None
 
 
+
 def get_pakistan_time():
-    pkt = pytz.timezone('Asia/Karachi')
+    pkt = ZoneInfo('Asia/Karachi')
     return datetime.now(pkt).strftime("%d-%b-%Y | %I:%M %p")
 
 
 def get_pakistan_date():
-    pkt = pytz.timezone('Asia/Karachi')
+    pkt = ZoneInfo('Asia/Karachi')
     return datetime.now(pkt).strftime("%d-%b-%Y")
 
 
 def get_pakistan_hour():
-    pkt = pytz.timezone('Asia/Karachi')
+    pkt = ZoneInfo('Asia/Karachi')
     return datetime.now(pkt).hour
-
 
 def round_price(p):
     if p >= 1000:     return round(p, 2)
