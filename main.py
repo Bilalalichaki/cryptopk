@@ -28,16 +28,13 @@ PROXIES = None
 
 WATCHLIST = [
     'BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'BNBUSDT', 'XRPUSDT',
-    'ADAUSDT', 'DOGEUSDT', 'AVAXUSDT', 'LINKUSDT', 'SUIUSDT',
-    'NEARUSDT', 'APTUSDT', 'LTCUSDT', 'DOTUSDT', 'BCHUSDT',
-    'ZECUSDT', 'PEPEUSDT', 'SHIBUSDT', 'FETUSDT',
-    'RENDERUSDT', 'INJUSDT', 'TIAUSDT', 'TAOUSDT', 'SEIUSDT',
-    'PAXGUSDT', 'ICPUSDT',
+    'ADAUSDT', 'DOGEUSDT', 'LTCUSDT', 'DOTUSDT', 'BCHUSDT',
+    'ZECUSDT', 'PEPEUSDT', 'PAXGUSDT', 'ICPUSDT',
 ]
 FUTURES_WATCHLIST = []
 
 COOLDOWN_SECONDS        = 7200
-SIGNAL_SCAN_INTERVAL    = 600
+SIGNAL_SCAN_INTERVAL    = 900 #15min
 TP_SL_CHECK_INTERVAL    = 30
 MIN_AI_SCORE            = 150
 GLOBAL_COOLDOWN_SECONDS = 3600
@@ -90,7 +87,7 @@ def round_price(p):
     else:             return round(p, 8)
 
 
-def fetch_klines(symbol, timeframe, limit=200, futures=False):
+def fetch_klines(symbol, timeframe, limit=100, futures=False):
     try:
         if futures:
             url = f"https://fapi.binance.com/fapi/v1/klines?symbol={symbol}&interval={timeframe}&limit={limit}"
