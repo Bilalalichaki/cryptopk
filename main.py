@@ -640,39 +640,3 @@ start_scanner_once()
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 10000))
     app.run(host='0.0.0.0', port=port, threaded=True)
-
-# ==========================================
-# TEST MESSAGE — ORACLE VM CHECK
-# ==========================================
-def send_test_on_startup():
-    """Bot start hote hi test message bhejta hai."""
-    try:
-        test_admin = (
-            f"🧪 *ORACLE VM TEST*\n\n"
-            f"✅ Bot chal raha hai\n"
-            f"🖥️ VM: Oracle Cloud\n"
-            f"⏰ Time: `{get_pakistan_time()}`"
-        )
-        send_admin_msg(test_admin)
-        
-        test_channel = (
-            f"🧪 *TEST SIGNAL*\n"
-            f"═══════════════════\n"
-            f"🪙 *COIN:* TEST\n"
-            f"⏰ *TIME:* `{get_pakistan_time()}`\n"
-            f"═══════════════════\n\n"
-            f"💵 *ENTRY:* `100.00`\n\n"
-            f"🎯 *TP 1:* `103.00`\n"
-            f"🎯 *TP 2:* `105.00`\n\n"
-            f"🛑 *STOP LOSS:* `98.00`\n\n"
-            f"═══════════════════\n"
-            f"📈 *SETUP:* 🧪 Oracle VM Test"
-        )
-        send_telegram_msg(test_channel)
-        
-        logger.info("🧪 Test messages sent")
-    except Exception as e:
-        logger.error(f"Test failed: {e}")
-
-# Startup pe test bhejo
-send_test_on_startup()
