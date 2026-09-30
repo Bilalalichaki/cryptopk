@@ -36,12 +36,12 @@ FUTURES_WATCHLIST = []
 COOLDOWN_SECONDS        = 7200
 SIGNAL_SCAN_INTERVAL    = 900 #15min
 TP_SL_CHECK_INTERVAL    = 30
-MIN_AI_SCORE            = 120
+MIN_AI_SCORE            = 150
 GLOBAL_COOLDOWN_SECONDS = 3600
 DAILY_SUMMARY_HOUR      = 23
 
 VOLUME_FILTER_ENABLED = True
-VOLUME_THRESHOLD      = 0.6
+VOLUME_THRESHOLD      = 0.8
 
 ATR_PERIOD           = 14
 SL_ATR_MULTIPLIER    = 1.5
@@ -472,23 +472,34 @@ def check_active_trade_results():
 
 
 def analyze_and_build_signal(symbol, is_futures=False):
+    # SIRF 15m aur 1h — 4h hata diya
     df_15m = fetch_klines(symbol, '15m', futures=is_futures)
     df_1h  = fetch_klines(symbol, '1h',  futures=is_futures)
-    df_4h  = fetch_klines(symbol, '4h',  limit=100, futures=is_futures)
-    if df_15m is None or df_1h is None or df_4h is None:
+    if df_15m is None or df_1h is None:
         return None
     s15, t15 = analyze_tf(df_15m, "15m")
     s1h, t1h = analyze_tf(df_1h,  "1h")
-    s4h, t4h = analyze_tf(df_4h,  "4h")
-    logger.info(f"🔍 {symbol} | 15m: {s15}/{t15} | 1h: {s1h}/{t1h} | 4h: {s4h}/{t4h}")
-    if t4h == "NEUTRAL":
+    logger.info(f"🔍 {symbol} | 15m: {s15}/{t15} | 1h: {s1h}/{t1h}")
+    
+    # Agar dono NEUTRAL hain to skip
+    if t15 == "NEUTRAL" and t1h == "NEUTRAL":
         return None
-    if t15 != t4h or t1h != t4h:
-        return None
-    trend = t4h
-    score = min(s15, s1h, s4h)
+    
+    # Trend decide karo
+    if t15 == t1h and t15 != "NEUTRAL":
+        trend = t15
+        score = min(s15, s1h)
+        setup_label = "🔥 15m + 1h Aligned"
+    else:
+        trend = t15 if s15 >= s1h else t1h
+        score = max(s15, s1h)
+        if trend == "NEUTRAL":
+            return None
+        setup_label = "⚡ Single TF Signal"
+    
     if score < MIN_AI_SCORE:
         return None
+    
     atr_series = calculate_atr(df_15m, ATR_PERIOD)
     atr        = atr_series.iloc[-1]
     if pd.isna(atr) or atr <= 0:
@@ -518,7 +529,7 @@ def analyze_and_build_signal(symbol, is_futures=False):
         f"🎯 *TP 2:* `{tp2}`\n\n"
         f"🛑 *STOP LOSS:* `{sl}`\n\n"
         f"═══════════════════\n"
-        f"📈 *SETUP:* 🔥 4h Aligned Trade"
+        f"📈 *SETUP:* {setup_label}"
     )
     return msg, pair, {
         'direction': trend,
@@ -572,6 +583,9 @@ def main_loop():
     logger.info("🚀 Signal Bot Started...")
     logger.info(f"📢 Channel: {TELEGRAM_CHAT_ID}")
     logger.info(f"👤 Admin: {TELEGRAM_ADMIN_ID}")
+    logger.info(f"🧠 Timeframes: 15m + 1h only (4h removed)")
+    logger.info(f"🎯 Min Score: {MIN_AI_SCORE}")
+    logger.info(f"📊 Volume Threshold: {VOLUME_THRESHOLD}")
     last_signal_scan = 0
     while True:
         try:
@@ -608,6 +622,8 @@ def status():
         "today_signals": daily_stats['signals'],
         "today_win_rate": f"{win_rate}%",
         "closed_trades": total_closed,
+        "timeframes": "15m + 1h",
+        "min_score": MIN_AI_SCORE,
         "time": get_pakistan_time()
     }, 200
 
