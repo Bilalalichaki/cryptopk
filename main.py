@@ -37,7 +37,7 @@ COOLDOWN_SECONDS        = 7200
 SIGNAL_SCAN_INTERVAL    = 900 #15min
 TP_SL_CHECK_INTERVAL    = 30
 MIN_AI_SCORE            = 120
-GLOBAL_COOLDOWN_SECONDS = 3600
+GLOBAL_COOLDOWN_SECONDS = 900   # ← 15 min (changed from 3600)
 DAILY_SUMMARY_HOUR      = 23
 
 VOLUME_FILTER_ENABLED = True
@@ -57,7 +57,8 @@ daily_stats             = {
     'tp1_hits': 0,
     'tp2_hits': 0,
     'sl_hits': 0,
-    'pending': 0
+    'pending': 0,
+    'trade_details': []   # ← NEW
 }
 state_lock              = threading.Lock()
 last_global_signal_time = 0
@@ -314,7 +315,8 @@ def reset_daily_stats_if_needed():
             'tp1_hits': 0,
             'tp2_hits': 0,
             'sl_hits': 0,
-            'pending': 0
+            'pending': 0,
+            'trade_details': []   # ← NEW
         }
 
 
@@ -344,6 +346,7 @@ def build_daily_summary():
     elif win_rate >= 60:      emoji = "✅"
     elif win_rate >= 50:      emoji = "😊"
     else:                     emoji = "⚠️"
+    
     msg = (
         f"📊 *DAILY SUMMARY — {stats['date']}*\n"
         f"═══════════════════════════════\n\n"
@@ -355,8 +358,54 @@ def build_daily_summary():
         f"═══════════════════════════════\n"
         f"🎯 *Win Rate:* `{win_rate}%` {emoji}\n"
         f"📊 *Closed Trades:* `{total_closed}`\n"
-        f"═══════════════════════════════"
+        f"═══════════════════════════════\n"
     )
+    
+    # Trade Details
+    details = stats.get('trade_details', [])
+    if details:
+        msg += f"\n📋 *TRADE DETAILS:*\n\n"
+        for i, trade in enumerate(details[:10], 1):
+            dir_emoji = "🟢" if trade.get('direction') == 'LONG' else "🔴"
+            result = trade.get('result', 'PENDING')
+            if result in ['TP1', 'TP2']:
+                res_emoji = "✅"
+            elif result == 'SL':
+                res_emoji = "❌"
+            else:
+                res_emoji = "⏳"
+            
+            msg += (
+                f"{i}. {dir_emoji} *{trade.get('coin', 'N/A')}* | {trade.get('direction', 'N/A')} | {result} {res_emoji}\n"
+                f"   Entry: `{trade.get('entry', 'N/A')}` | Exit: `{trade.get('exit_price', 'N/A')}`\n\n"
+            )
+        msg += f"═══════════════════════════════\n"
+        
+        # Best / Worst
+        coin_wins = {}
+        coin_total = {}
+        for trade in details:
+            coin = trade.get('coin', 'N/A')
+            coin_total[coin] = coin_total.get(coin, 0) + 1
+            if trade.get('result') in ['TP1', 'TP2']:
+                coin_wins[coin] = coin_wins.get(coin, 0) + 1
+        
+        if coin_wins:
+            best = max(coin_wins.items(), key=lambda x: x[1])
+            msg += f"📊 *BEST:* {best[0]} ({best[1]}/{coin_total[best[0]]})\n"
+        
+        coin_losses = {}
+        for trade in details:
+            if trade.get('result') == 'SL':
+                coin = trade.get('coin', 'N/A')
+                coin_losses[coin] = coin_losses.get(coin, 0) + 1
+        
+        if coin_losses:
+            worst = max(coin_losses.items(), key=lambda x: x[1])
+            msg += f"📊 *WORST:* {worst[0]} ({worst[1]} SL)\n"
+        
+        msg += f"═══════════════════════════════"
+    
     return msg
 
 
@@ -396,6 +445,13 @@ def check_active_trade_results():
                 )
                 trade['tp2_hit'] = True
                 daily_stats['tp2_hits'] += 1
+                # Trade detail
+                daily_stats['trade_details'].append({
+                    'coin': pair, 'direction': 'LONG',
+                    'entry': trade['entry'], 'exit_price': trade['tp2'],
+                    'result': 'TP2', 'time': get_pakistan_time()
+                })
+                sent_history[pair] = time.time()   # ← Cooldown reset
                 remove = True
             elif recent_high >= trade['tp1'] and not trade['tp1_hit']:
                 send_telegram_msg(
@@ -411,6 +467,12 @@ def check_active_trade_results():
                 )
                 trade['tp1_hit'] = True
                 daily_stats['tp1_hits'] += 1
+                daily_stats['trade_details'].append({
+                    'coin': pair, 'direction': 'LONG',
+                    'entry': trade['entry'], 'exit_price': trade['tp1'],
+                    'result': 'TP1', 'time': get_pakistan_time()
+                })
+                sent_history[pair] = time.time()   # ← Cooldown reset
             elif recent_low <= trade['sl']:
                 send_telegram_msg(
                     f"🛑 *STOP LOSS HIT* 🛑\n\n"
@@ -421,6 +483,12 @@ def check_active_trade_results():
                     reply_to=sig_msg_id
                 )
                 daily_stats['sl_hits'] += 1
+                daily_stats['trade_details'].append({
+                    'coin': pair, 'direction': 'LONG',
+                    'entry': trade['entry'], 'exit_price': trade['sl'],
+                    'result': 'SL', 'time': get_pakistan_time()
+                })
+                sent_history[pair] = time.time()   # ← Cooldown reset
                 remove = True
 
         elif d == 'SHORT':
@@ -437,6 +505,12 @@ def check_active_trade_results():
                 )
                 trade['tp2_hit'] = True
                 daily_stats['tp2_hits'] += 1
+                daily_stats['trade_details'].append({
+                    'coin': pair, 'direction': 'SHORT',
+                    'entry': trade['entry'], 'exit_price': trade['tp2'],
+                    'result': 'TP2', 'time': get_pakistan_time()
+                })
+                sent_history[pair] = time.time()
                 remove = True
             elif recent_low <= trade['tp1'] and not trade['tp1_hit']:
                 send_telegram_msg(
@@ -452,6 +526,12 @@ def check_active_trade_results():
                 )
                 trade['tp1_hit'] = True
                 daily_stats['tp1_hits'] += 1
+                daily_stats['trade_details'].append({
+                    'coin': pair, 'direction': 'SHORT',
+                    'entry': trade['entry'], 'exit_price': trade['tp1'],
+                    'result': 'TP1', 'time': get_pakistan_time()
+                })
+                sent_history[pair] = time.time()
             elif recent_high >= trade['sl']:
                 send_telegram_msg(
                     f"🛑 *STOP LOSS HIT* 🛑\n\n"
@@ -462,6 +542,12 @@ def check_active_trade_results():
                     reply_to=sig_msg_id
                 )
                 daily_stats['sl_hits'] += 1
+                daily_stats['trade_details'].append({
+                    'coin': pair, 'direction': 'SHORT',
+                    'entry': trade['entry'], 'exit_price': trade['sl'],
+                    'result': 'SL', 'time': get_pakistan_time()
+                })
+                sent_history[pair] = time.time()
                 remove = True
 
         if remove:
@@ -472,7 +558,6 @@ def check_active_trade_results():
 
 
 def analyze_and_build_signal(symbol, is_futures=False):
-    # SIRF 15m aur 1h — 4h hata diya
     df_15m = fetch_klines(symbol, '15m', futures=is_futures)
     df_1h  = fetch_klines(symbol, '1h',  futures=is_futures)
     if df_15m is None or df_1h is None:
@@ -481,11 +566,9 @@ def analyze_and_build_signal(symbol, is_futures=False):
     s1h, t1h = analyze_tf(df_1h,  "1h")
     logger.info(f"🔍 {symbol} | 15m: {s15}/{t15} | 1h: {s1h}/{t1h}")
     
-    # Agar dono NEUTRAL hain to skip
     if t15 == "NEUTRAL" and t1h == "NEUTRAL":
         return None
     
-    # Trend decide karo
     if t15 == t1h and t15 != "NEUTRAL":
         trend = t15
         score = min(s15, s1h)
@@ -500,21 +583,53 @@ def analyze_and_build_signal(symbol, is_futures=False):
     if score < MIN_AI_SCORE:
         return None
     
-    atr_series = calculate_atr(df_15m, ATR_PERIOD)
-    atr        = atr_series.iloc[-1]
-    if pd.isna(atr) or atr <= 0:
-        return None
-    price = df_15m['close'].iloc[-1]
+    # ==========================================
+    # INDICATOR-BASED SL/TP (Bollinger + SAR + EMA20)
+    # ==========================================
+    close = df_15m['close']
+    sma20 = close.rolling(20).mean()
+    std20 = close.rolling(20).std()
+    ema20 = close.ewm(span=20, adjust=False).mean()
+    
+    bb_upper  = (sma20 + 2*std20).iloc[-1]
+    bb_middle = sma20.iloc[-1]
+    bb_lower  = (sma20 - 2*std20).iloc[-1]
+    ema20_val = ema20.iloc[-1]
+    
+    sar_df    = calculate_parabolic_sar(df_15m)
+    sar_value = sar_df['sar'].iloc[-1]
+    
+    price = close.iloc[-1]
+    
     if trend == "LONG":
         badge = "🟢 *BUY / LONG SIGNAL* 🟢"
-        sl    = round_price(price - (SL_ATR_MULTIPLIER  * atr))
-        tp1   = round_price(price + (TP1_ATR_MULTIPLIER * atr))
-        tp2   = round_price(price + (TP2_ATR_MULTIPLIER * atr))
+        # SL = jo neeche hai (SAR ya BB Lower)
+        sl  = round_price(min(sar_value, bb_lower))
+        # TP1 = EMA20 ya BB Middle (jo upar hai)
+        tp1 = round_price(max(ema20_val, bb_middle))
+        # TP2 = BB Upper
+        tp2 = round_price(bb_upper)
+        
+        # Safety check — sl price se neeche hona chahiye, tp upar
+        if sl >= price:
+            sl = round_price(price * 0.985)
+        if tp1 <= price:
+            tp1 = round_price(price * 1.015)
+        if tp2 <= tp1:
+            tp2 = round_price(tp1 * 1.015)
     else:
         badge = "🔴 *SELL / SHORT SIGNAL* 🔴"
-        sl    = round_price(price + (SL_ATR_MULTIPLIER  * atr))
-        tp1   = round_price(price - (TP1_ATR_MULTIPLIER * atr))
-        tp2   = round_price(price - (TP2_ATR_MULTIPLIER * atr))
+        sl  = round_price(max(sar_value, bb_upper))
+        tp1 = round_price(min(ema20_val, bb_middle))
+        tp2 = round_price(bb_lower)
+        
+        if sl <= price:
+            sl = round_price(price * 1.015)
+        if tp1 >= price:
+            tp1 = round_price(price * 0.985)
+        if tp2 >= tp1:
+            tp2 = round_price(tp1 * 0.985)
+    
     pair = symbol.replace('USDT', '')
     if pair in ['PAXG', 'XAU']:
         pair = 'XAU / GOLD'
@@ -583,9 +698,11 @@ def main_loop():
     logger.info("🚀 Signal Bot Started...")
     logger.info(f"📢 Channel: {TELEGRAM_CHAT_ID}")
     logger.info(f"👤 Admin: {TELEGRAM_ADMIN_ID}")
-    logger.info(f"🧠 Timeframes: 15m + 1h only (4h removed)")
+    logger.info(f"🧠 Timeframes: 15m + 1h only")
     logger.info(f"🎯 Min Score: {MIN_AI_SCORE}")
     logger.info(f"📊 Volume Threshold: {VOLUME_THRESHOLD}")
+    logger.info(f"⏸️ Global Cooldown: {GLOBAL_COOLDOWN_SECONDS}s ({GLOBAL_COOLDOWN_SECONDS//60} min)")
+    logger.info(f"💰 SL/TP: Indicator-Based (Bollinger + SAR + EMA20)")
     last_signal_scan = 0
     while True:
         try:
@@ -624,6 +741,8 @@ def status():
         "closed_trades": total_closed,
         "timeframes": "15m + 1h",
         "min_score": MIN_AI_SCORE,
+        "global_cooldown": GLOBAL_COOLDOWN_SECONDS,
+        "sl_tp_method": "Indicator-Based (Bollinger + SAR + EMA20)",
         "time": get_pakistan_time()
     }, 200
 
