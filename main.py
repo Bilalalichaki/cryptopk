@@ -36,7 +36,7 @@ FUTURES_WATCHLIST = []
 COOLDOWN_SECONDS        = 7200
 SIGNAL_SCAN_INTERVAL    = 900
 TP_SL_CHECK_INTERVAL    = 30
-MIN_AI_SCORE            = 120
+MIN_AI_SCORE            = 70
 GLOBAL_COOLDOWN_SECONDS = 900
 DAILY_SUMMARY_HOUR      = 23
 
@@ -44,9 +44,9 @@ VOLUME_FILTER_ENABLED = True
 VOLUME_THRESHOLD      = 0.8
 
 ATR_PERIOD           = 14
-SL_ATR_MULTIPLIER    = 1.5
-TP1_ATR_MULTIPLIER   = 2.0
-TP2_ATR_MULTIPLIER   = 3.5
+SL_ATR_MULTIPLIER    = 2.0
+TP1_ATR_MULTIPLIER   = 2.5
+TP2_ATR_MULTIPLIER   = 4.0
 
 sent_history            = {}
 active_trades           = {}
@@ -111,6 +111,15 @@ def fetch_klines(symbol, timeframe, limit=100, futures=False):
         return None
 
 
+def calculate_atr(df, period=14):
+    high_low   = df['high'] - df['low']
+    high_close = (df['high'] - df['close'].shift()).abs()
+    low_close  = (df['low']  - df['close'].shift()).abs()
+    tr  = pd.concat([high_low, high_close, low_close], axis=1).max(axis=1)
+    atr = tr.rolling(period).mean()
+    return atr
+
+
 def calculate_parabolic_sar(df, af_start=0.02, af_step=0.02, af_max=0.2):
     high = df['high'].values
     low  = df['low'].values
@@ -166,38 +175,19 @@ def calculate_parabolic_sar(df, af_start=0.02, af_step=0.02, af_max=0.2):
     return df
 
 
-def calculate_atr(df, period=14):
-    high_low   = df['high'] - df['low']
-    high_close = (df['high'] - df['close'].shift()).abs()
-    low_close  = (df['low']  - df['close'].shift()).abs()
-    tr  = pd.concat([high_low, high_close, low_close], axis=1).max(axis=1)
-    atr = tr.rolling(period).mean()
-    return atr
-
-
-def detect_rsi_divergence(df, rsi, lookback=20):
-    if len(df) < lookback:
-        return "NONE"
-    recent     = df.iloc[-lookback:]
-    recent_rsi = rsi.iloc[-lookback:]
-    price_low_idx  = recent['low'].idxmin()
-    price_high_idx = recent['high'].idxmax()
-    price_low  = recent.loc[price_low_idx,  'low']
-    price_high = recent.loc[price_high_idx, 'high']
-    rsi_low    = recent_rsi.loc[price_low_idx]
-    rsi_high   = recent_rsi.loc[price_high_idx]
-    prev_low_price  = recent['low'].iloc[:lookback//2].min()
-    prev_high_price = recent['high'].iloc[:lookback//2].max()
-    prev_low_rsi    = recent_rsi.iloc[:lookback//2].min()
-    prev_high_rsi   = recent_rsi.iloc[:lookback//2].max()
-    if price_low < prev_low_price and rsi_low > prev_low_rsi:
-        return "BULLISH"
-    if price_high > prev_high_price and rsi_high < prev_high_rsi:
-        return "BEARISH"
-    return "NONE"
-
-
+# ==========================================
+# AI ANALYSIS — 5 INDICATORS
+# ==========================================
 def analyze_tf(df, timeframe_label=""):
+    """
+    5-Indicator AI Analysis:
+    - EMA 20 + EMA 50 (Trend) — 30 points
+    - RSI (Momentum) — 25 points
+    - Volume (Confirmation) — 20 points
+    - MACD (Momentum confirm) — 15 points
+    - SAR (Reversal) — 10 points
+    Total = 100 points
+    """
     if df is None or len(df) < 50:
         return 0, "NEUTRAL"
 
@@ -210,28 +200,48 @@ def analyze_tf(df, timeframe_label=""):
         if current_volume < (avg_volume * VOLUME_THRESHOLD):
             return 0, "NEUTRAL"
 
+    bull, bear = 0, 0
+    price = close.iloc[-1]
+
+    # ========== 1. EMA 20 + EMA 50 (30 pts) ==========
+    ema20 = close.ewm(span=20, adjust=False).mean()
+    ema50 = close.ewm(span=50, adjust=False).mean()
+
+    if price > ema20.iloc[-1] > ema50.iloc[-1]:
+        bull += 30
+    elif price > ema20.iloc[-1]:
+        bull += 15
+    elif price < ema20.iloc[-1] < ema50.iloc[-1]:
+        bear += 30
+    elif price < ema20.iloc[-1]:
+        bear += 15
+
+    # ========== 2. RSI (25 pts) ==========
     delta = close.diff()
     gain  = (delta.where(delta > 0, 0)).rolling(14).mean()
     loss  = (-delta.where(delta < 0, 0)).rolling(14).mean()
     rs    = gain / loss
     rsi   = 100 - (100 / (1 + rs))
+    rsi_val = rsi.iloc[-1]
 
-    ema20 = close.ewm(span=20, adjust=False).mean()
-    sma50 = close.rolling(50).mean()
+    if rsi_val < 30:
+        bull += 25
+    elif rsi_val < 45:
+        bull += 12
+    elif rsi_val > 70:
+        bear += 25
+    elif rsi_val > 55:
+        bear += 12
 
-    price      = close.iloc[-1]
-    bull, bear = 0, 0
+    # ========== 3. Volume (20 pts) ==========
+    avg_vol = volume.rolling(20).mean().iloc[-1]
+    cur_vol = volume.iloc[-1]
 
-    if rsi.iloc[-1] < 40:    bull += 50
-    elif rsi.iloc[-1] < 50:  bull += 30
-    elif rsi.iloc[-1] > 60:  bear += 50
-    elif rsi.iloc[-1] > 50:  bear += 30
+    if cur_vol > avg_vol * 1.3:
+        if bull > bear:   bull += 20
+        elif bear > bull: bear += 20
 
-    if price > ema20.iloc[-1] > sma50.iloc[-1]:    bull += 50
-    elif price > ema20.iloc[-1]:                    bull += 25
-    elif price < ema20.iloc[-1] < sma50.iloc[-1]:  bear += 50
-    elif price < ema20.iloc[-1]:                    bear += 25
-
+    # ========== 4. MACD (15 pts) ==========
     ema12 = close.ewm(span=12, adjust=False).mean()
     ema26 = close.ewm(span=26, adjust=False).mean()
     macd_line   = ema12 - ema26
@@ -239,33 +249,21 @@ def analyze_tf(df, timeframe_label=""):
     histogram   = macd_line - signal_line
 
     if macd_line.iloc[-1] > signal_line.iloc[-1] and histogram.iloc[-1] > 0:
-        bull += 25
+        bull += 15
     elif macd_line.iloc[-1] < signal_line.iloc[-1] and histogram.iloc[-1] < 0:
-        bear += 25
+        bear += 15
 
+    # ========== 5. SAR (10 pts) ==========
     sar_df = calculate_parabolic_sar(df)
-    if sar_df['sar_trend'].iloc[-1] == 1 and sar_df['sar'].iloc[-1] < price:
-        bull += 25
-    elif sar_df['sar_trend'].iloc[-1] == -1 and sar_df['sar'].iloc[-1] > price:
-        bear += 25
+    sar_val = sar_df['sar'].iloc[-1]
+    sar_trend = sar_df['sar_trend'].iloc[-1]
 
-    sma20 = close.rolling(20).mean()
-    std20 = close.rolling(20).std()
-    if price <= (sma20 - 2*std20).iloc[-1]:
-        bull += 25
-    elif price >= (sma20 + 2*std20).iloc[-1]:
-        bear += 25
+    if sar_trend == 1 and sar_val < price:
+        bull += 10
+    elif sar_trend == -1 and sar_val > price:
+        bear += 10
 
-    if volume.rolling(5).mean().iloc[-1] > volume.rolling(20).mean().iloc[-1] * 1.2:
-        if bull > bear:   bull += 15
-        elif bear > bull: bear += 15
-
-    divergence = detect_rsi_divergence(df, rsi)
-    if divergence == "BULLISH":
-        bull += 20
-    elif divergence == "BEARISH":
-        bear += 20
-
+    # ========== FINAL ==========
     if bull > bear:
         return bull, "LONG"
     elif bear > bull:
@@ -346,7 +344,7 @@ def build_daily_summary():
     elif win_rate >= 60:      emoji = "✅"
     elif win_rate >= 50:      emoji = "😊"
     else:                     emoji = "⚠️"
-    
+
     msg = (
         f"📊 *DAILY SUMMARY — {stats['date']}*\n"
         f"═══════════════════════════════\n\n"
@@ -360,7 +358,7 @@ def build_daily_summary():
         f"📊 *Closed Trades:* `{total_closed}`\n"
         f"═══════════════════════════════\n"
     )
-    
+
     details = stats.get('trade_details', [])
     if details:
         msg += f"\n📋 *TRADE DETAILS:*\n\n"
@@ -373,13 +371,13 @@ def build_daily_summary():
                 res_emoji = "❌"
             else:
                 res_emoji = "⏳"
-            
+
             msg += (
                 f"{i}. {dir_emoji} *{trade.get('coin', 'N/A')}* | {trade.get('direction', 'N/A')} | {result} {res_emoji}\n"
                 f"   Entry: `{trade.get('entry', 'N/A')}` | Exit: `{trade.get('exit_price', 'N/A')}`\n\n"
             )
         msg += f"═══════════════════════════════\n"
-        
+
         coin_wins = {}
         coin_total = {}
         for trade in details:
@@ -387,23 +385,23 @@ def build_daily_summary():
             coin_total[coin] = coin_total.get(coin, 0) + 1
             if trade.get('result') in ['TP1', 'TP2']:
                 coin_wins[coin] = coin_wins.get(coin, 0) + 1
-        
+
         if coin_wins:
             best = max(coin_wins.items(), key=lambda x: x[1])
             msg += f"📊 *BEST:* {best[0]} ({best[1]}/{coin_total[best[0]]})\n"
-        
+
         coin_losses = {}
         for trade in details:
             if trade.get('result') == 'SL':
                 coin = trade.get('coin', 'N/A')
                 coin_losses[coin] = coin_losses.get(coin, 0) + 1
-        
+
         if coin_losses:
             worst = max(coin_losses.items(), key=lambda x: x[1])
             msg += f"📊 *WORST:* {worst[0]} ({worst[1]} SL)\n"
-        
+
         msg += f"═══════════════════════════════"
-    
+
     return msg
 
 
@@ -555,58 +553,97 @@ def check_active_trade_results():
 
 
 def analyze_and_build_signal(symbol, is_futures=False):
+    # ==========================================
+    # 4 TIMEFRAMES: 15m + 1h + 4h + 1D
+    # ==========================================
     df_15m = fetch_klines(symbol, '15m', futures=is_futures)
     df_1h  = fetch_klines(symbol, '1h',  futures=is_futures)
-    if df_15m is None or df_1h is None:
+    df_4h  = fetch_klines(symbol, '4h',  limit=100, futures=is_futures)
+    df_1d  = fetch_klines(symbol, '1d',  limit=100, futures=is_futures)
+
+    if df_15m is None or df_1h is None or df_4h is None or df_1d is None:
         return None
+
     s15, t15 = analyze_tf(df_15m, "15m")
     s1h, t1h = analyze_tf(df_1h,  "1h")
-    logger.info(f"🔍 {symbol} | 15m: {s15}/{t15} | 1h: {s1h}/{t1h}")
-    
-    if t15 == "NEUTRAL" and t1h == "NEUTRAL":
+    s4h, t4h = analyze_tf(df_4h,  "4h")
+    s1d, t1d = analyze_tf(df_1d,  "1d")
+
+    logger.info(f"🔍 {symbol} | 15m: {s15}/{t15} | 1h: {s1h}/{t1h} | 4h: {s4h}/{t4h} | 1d: {s1d}/{t1d}")
+
+    # ==========================================
+    # AI PREDICTION — 4-TF Alignment
+    # ==========================================
+    trends = [t15, t1h, t4h, t1d]
+    non_neutral = [t for t in trends if t != "NEUTRAL"]
+
+    if len(non_neutral) == 0:
         return None
-    
-    if t15 == t1h and t15 != "NEUTRAL":
-        trend = t15
-        score = min(s15, s1h)
-        setup_label = "🔥 15m + 1h Aligned"
+
+    # Count aligned trends
+    long_count  = trends.count("LONG")
+    short_count = trends.count("SHORT")
+
+    if long_count == 4:
+        trend = "LONG"
+        score = min(s15, s1h, s4h, s1d) + 20   # +20 bonus for 4-TF alignment
+        setup_label = "🏆 4-TF Aligned (MAX)"
+    elif short_count == 4:
+        trend = "SHORT"
+        score = min(s15, s1h, s4h, s1d) + 20
+        setup_label = "🏆 4-TF Aligned (MAX)"
+    elif long_count == 3:
+        trend = "LONG"
+        scores = [s for s, t in zip([s15, s1h, s4h, s1d], trends) if t == "LONG"]
+        score = min(scores) + 10
+        setup_label = "🔥 3-TF Aligned"
+    elif short_count == 3:
+        trend = "SHORT"
+        scores = [s for s, t in zip([s15, s1h, s4h, s1d], trends) if t == "SHORT"]
+        score = min(scores) + 10
+        setup_label = "🔥 3-TF Aligned"
+    elif long_count == 2:
+        trend = "LONG"
+        scores = [s for s, t in zip([s15, s1h, s4h, s1d], trends) if t == "LONG"]
+        score = max(scores)
+        setup_label = "⚡ 2-TF Aligned"
+    elif short_count == 2:
+        trend = "SHORT"
+        scores = [s for s, t in zip([s15, s1h, s4h, s1d], trends) if t == "SHORT"]
+        score = max(scores)
+        setup_label = "⚡ 2-TF Aligned"
     else:
-        trend = t15 if s15 >= s1h else t1h
-        score = max(s15, s1h)
-        if trend == "NEUTRAL":
-            return None
-        setup_label = "⚡ Single TF Signal"
-    
+        return None
+
     if score < MIN_AI_SCORE:
         return None
-    
+
     # ==========================================
-    # FIXED SL/TP — ATR-Based + Minimum 2% Distance
-    # Whipsaw se bachne ke liye
+    # ATR-Based SL/TP
     # ==========================================
     close = df_15m['close']
     price = close.iloc[-1]
-    
+
     atr_series = calculate_atr(df_15m, ATR_PERIOD)
     atr = atr_series.iloc[-1]
     if pd.isna(atr) or atr <= 0:
         return None
-    
+
     min_sl_distance = price * 0.02
-    
+
     if trend == "LONG":
         badge = "🟢 *BUY / LONG SIGNAL* 🟢"
-        sl_distance = max(2.0 * atr, min_sl_distance)
+        sl_distance = max(SL_ATR_MULTIPLIER * atr, min_sl_distance)
         sl  = round_price(price - sl_distance)
-        tp1 = round_price(price + (2.5 * atr))
-        tp2 = round_price(price + (4.0 * atr))
+        tp1 = round_price(price + (TP1_ATR_MULTIPLIER * atr))
+        tp2 = round_price(price + (TP2_ATR_MULTIPLIER * atr))
     else:
         badge = "🔴 *SELL / SHORT SIGNAL* 🔴"
-        sl_distance = max(2.0 * atr, min_sl_distance)
+        sl_distance = max(SL_ATR_MULTIPLIER * atr, min_sl_distance)
         sl  = round_price(price + sl_distance)
-        tp1 = round_price(price - (2.5 * atr))
-        tp2 = round_price(price - (4.0 * atr))
-    
+        tp1 = round_price(price - (TP1_ATR_MULTIPLIER * atr))
+        tp2 = round_price(price - (TP2_ATR_MULTIPLIER * atr))
+
     pair = symbol.replace('USDT', '')
     if pair in ['PAXG', 'XAU']:
         pair = 'XAU / GOLD'
@@ -675,11 +712,11 @@ def main_loop():
     logger.info("🚀 Signal Bot Started...")
     logger.info(f"📢 Channel: {TELEGRAM_CHAT_ID}")
     logger.info(f"👤 Admin: {TELEGRAM_ADMIN_ID}")
-    logger.info(f"🧠 Timeframes: 15m + 1h only")
-    logger.info(f"🎯 Min Score: {MIN_AI_SCORE}")
-    logger.info(f"📊 Volume Threshold: {VOLUME_THRESHOLD}")
+    logger.info(f"🧠 Timeframes: 15m + 1h + 4h + 1D (4 TF)")
+    logger.info(f"🧠 Indicators: EMA20 + EMA50 + RSI + Volume + MACD + SAR")
+    logger.info(f"🎯 Min Score: {MIN_AI_SCORE}/100")
     logger.info(f"⏸️ Global Cooldown: {GLOBAL_COOLDOWN_SECONDS}s ({GLOBAL_COOLDOWN_SECONDS//60} min)")
-    logger.info(f"💰 SL/TP: ATR-Based (SL=2.0x, TP1=2.5x, TP2=4.0x)")
+    logger.info(f"💰 SL/TP: ATR-Based (SL={SL_ATR_MULTIPLIER}x, TP1={TP1_ATR_MULTIPLIER}x, TP2={TP2_ATR_MULTIPLIER}x)")
     last_signal_scan = 0
     while True:
         try:
@@ -716,10 +753,11 @@ def status():
         "today_signals": daily_stats['signals'],
         "today_win_rate": f"{win_rate}%",
         "closed_trades": total_closed,
-        "timeframes": "15m + 1h",
+        "timeframes": "15m + 1h + 4h + 1D",
+        "indicators": "EMA + RSI + Volume + MACD + SAR (5)",
         "min_score": MIN_AI_SCORE,
         "global_cooldown": GLOBAL_COOLDOWN_SECONDS,
-        "sl_tp_method": "ATR-Based (SL=2.0x, TP1=2.5x, TP2=4.0x)",
+        "sl_tp_method": "ATR-Based",
         "time": get_pakistan_time()
     }, 200
 
