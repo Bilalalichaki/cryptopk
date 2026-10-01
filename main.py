@@ -85,6 +85,9 @@ def get_pakistan_date():
 def get_pakistan_hour():
     return datetime.now(ZoneInfo('Asia/Karachi')).hour
 
+def pk_time_from_ms(ms):
+    return datetime.fromtimestamp(int(ms) / 1000, ZoneInfo('Asia/Karachi')).strftime("%d-%b-%Y | %I:%M %p")
+
 def round_price(p):
     if p >= 1000:     return round(p, 2)
     elif p >= 1:      return round(p, 4)
@@ -444,9 +447,44 @@ def get_win_rate(stats=None):
     if total == 0: return 0, 0
     return round(wins / total * 100, 1), total
 
+RESULT_TEXT = {
+    'TP2': 'TP2 ✅✅', 'TP1': 'TP1 ✅ (trade chal raha)', 'SL': 'SL ❌',
+    'BE': 'TP1 ✅ → Entry pe close ➖', 'EXPIRED': 'Expired ⌛', 'PENDING': 'Pending ⏳'
+}
+
+def _trade_block(i, t):
+    d_emoji = "🟢" if t.get('direction') == 'LONG' else "🔴"
+    res = t.get('result', 'PENDING')
+    lines = [
+        f"*{i}. {d_emoji} {t.get('coin')}* | {t.get('direction')} | {RESULT_TEXT.get(res, res)}",
+        f"   📥 Entry: `{t.get('entry')}`",
+        f"   🕒 Entry Time: `{t.get('signal_time', '-')}`",
+        f"   🎯 TP1: `{t.get('tp1')}` | TP2: `{t.get('tp2')}` | SL: `{t.get('sl_orig')}`",
+    ]
+    if t.get('tp1_time'):
+        lines.append(f"   ✅ TP1 Hit: `{t['tp1_time']}`")
+    if res == 'TP2':
+        lines.append(f"   🏆 TP2 Hit: `{t.get('close_time')}`")
+    elif res == 'SL':
+        lines.append(f"   🛑 SL Hit: `{t.get('close_time')}`")
+    elif res == 'BE':
+        lines.append(f"   ➖ Entry pe close: `{t.get('close_time')}`")
+    elif res == 'EXPIRED':
+        lines.append(f"   ⌛ Expire: `{t.get('close_time')}`")
+    return "\n".join(lines)
+
 def build_daily_summary():
     with state_lock:
         stats = json.loads(json.dumps(daily_stats))
+        trades = list(stats.get('trade_details', []))
+        for sym, t in active_trades.items():       # abhi khule trades bhi dikhao
+            trades.append({
+                'coin': coin_name(sym), 'direction': t['direction'],
+                'entry': round_price(t['entry']), 'tp1': t['tp1'], 'tp2': t['tp2'],
+                'sl_orig': t.get('sl_orig', t['sl']), 'signal_time': t.get('signal_time'),
+                'tp1_time': t.get('tp1_time'),
+                'result': 'TP1' if t.get('tp1_hit') else 'PENDING',
+            })
     win_rate, total_closed = get_win_rate(stats)
     emoji = "🎉" if win_rate >= 70 else "✅" if win_rate >= 60 else "😊" if win_rate >= 50 else "⚠️" if total_closed > 0 else "😐"
 
@@ -463,25 +501,33 @@ def build_daily_summary():
         f"📊 *Closed Trades:* `{total_closed}`\n"
         f"═══════════════════════════════\n"
     )
-    details = stats.get('trade_details', [])
-    if details:
+    if trades:
         msg += "\n📋 *TRADE DETAILS:*\n\n"
-        for i, t in enumerate(details[:10], 1):
-            dir_emoji = "🟢" if t.get('direction') == 'LONG' else "🔴"
-            result = t.get('result', 'PENDING')
-            res_emoji = "✅" if result in ('TP1', 'TP2') else "❌" if result == 'SL' else "➖"
-            msg += (
-                f"{i}. {dir_emoji} *{t.get('coin')}* | {t.get('direction')} | {result} {res_emoji}\n"
-                f"   Entry: `{t.get('entry')}` | Exit: `{t.get('exit_price')}`\n\n"
-            )
+        msg += "\n\n".join(_trade_block(i, t) for i, t in enumerate(trades, 1))
     return msg
 
+def split_message(text, limit=3800):
+    """Telegram 4096 chars se lambi message nahi leta, isliye trade blocks ke beech se todo."""
+    parts, cur = [], ""
+    for block in text.split("\n\n"):
+        if len(cur) + len(block) + 2 > limit and cur:
+            parts.append(cur)
+            cur = block
+        else:
+            cur = f"{cur}\n\n{block}" if cur else block
+    if cur:
+        parts.append(cur)
+    return parts
+
 # ================== TRADE TRACKING ==================
-def _hit_msg(kind, trade, pair, price):
+def _hit_msg(kind, trade, pair, price, hit_time=None):
+    hit_time = hit_time or get_pakistan_time()
     side = "*LONG* 🟢" if trade['direction'] == 'LONG' else "*SHORT* 🔴"
     head = f"📌 *Pair:* `{pair}` | {side}\n💰 *Entry:* `{trade['entry']}`\n"
-    foot = (f"\n\n📅 *Signal Time:* `{trade.get('signal_time', 'N/A')}`\n"
-            f"⏰ *Hit Time:* `{get_pakistan_time()}`")
+    foot = f"\n\n📅 *Signal Time:* `{trade.get('signal_time', 'N/A')}`"
+    if kind != 'TP1' and trade.get('tp1_time'):
+        foot += f"\n✅ *TP1 Time:* `{trade['tp1_time']}`"
+    foot += f"\n⏰ *Hit Time:* `{hit_time}`"
     if kind == 'TP1':
         return ("✅ *SUCCESSFUL HIT — TARGET 1* ✅\n\n🎯 *TRADE IN PROFIT!*\n\n" + head +
                 f"✅ *TP1:* `{price}`\n\n💡 *SL ab entry pe move ho gaya — risk-free trade!*" + foot)
@@ -501,21 +547,28 @@ def process_trade_candles(symbol, trade, df, outbox):
     """
     Closed 1m candles ko time order mein process karta hai.
     Ek hi candle mein SL aur TP dono touch hon to SL pehle maana jata hai (conservative).
-    Returns True agar trade close ho gaya.
+    Hit time candle ke asli time se aata hai. Returns True agar trade close ho gaya.
     """
     pair = coin_name(symbol)
     is_long = _is_long(trade)
     reply = trade.get('signal_message_id')
+    trade.setdefault('sl_orig', trade['sl'])
 
-    def finish(kind, price):
-        outbox.append((_hit_msg(kind, trade, pair, price), reply))
+    def finish(kind, price, hit_time):
+        trade['close_time'] = hit_time
+        outbox.append((_hit_msg(kind, trade, pair, price, hit_time), reply))
         if kind == 'SL':
             daily_stats['sl_hits'] += 1
         if kind == 'TP2':
             daily_stats['tp2_hits'] += 1
         daily_stats['trade_details'].append({
-            'coin': pair, 'direction': trade['direction'], 'entry': round_price(trade['entry']),
-            'exit_price': price, 'result': kind, 'time': get_pakistan_time()
+            'coin': pair, 'direction': trade['direction'],
+            'entry': round_price(trade['entry']),
+            'tp1': trade['tp1'], 'tp2': trade['tp2'], 'sl_orig': trade['sl_orig'],
+            'signal_time': trade.get('signal_time'),
+            'tp1_time': trade.get('tp1_time'),
+            'close_time': hit_time,
+            'exit_price': price, 'result': kind,
         })
         sent_history[pair] = time.time()
         if daily_stats['pending'] > 0:
@@ -523,36 +576,38 @@ def process_trade_candles(symbol, trade, df, outbox):
 
     for _, c in df.iterrows():
         hi, lo = c['high'], c['low']
+        ht = pk_time_from_ms(c['time'])
         sl_hit  = (lo <= trade['sl'])  if is_long else (hi >= trade['sl'])
         tp1_hit = (hi >= trade['tp1']) if is_long else (lo <= trade['tp1'])
         tp2_hit = (hi >= trade['tp2']) if is_long else (lo <= trade['tp2'])
 
         if not trade['tp1_hit']:
             if sl_hit:
-                finish('SL', trade['sl'])
+                finish('SL', trade['sl'], ht)
                 return True
             if tp1_hit:
                 trade['tp1_hit'] = True
+                trade['tp1_time'] = ht
                 trade['sl'] = round_price(trade['entry'])     # breakeven
                 daily_stats['tp1_hits'] += 1
-                outbox.append((_hit_msg('TP1', trade, pair, trade['tp1']), reply))
+                outbox.append((_hit_msg('TP1', trade, pair, trade['tp1'], ht), reply))
                 if tp2_hit:
                     trade['tp2_hit'] = True
-                    finish('TP2', trade['tp2'])
+                    finish('TP2', trade['tp2'], ht)
                     return True
         else:
             if sl_hit:
-                finish('BE', trade['entry'])
+                finish('BE', trade['entry'], ht)
                 return True
             if tp2_hit:
                 trade['tp2_hit'] = True
-                finish('TP2', trade['tp2'])
+                finish('TP2', trade['tp2'], ht)
                 return True
 
     # expiry
     age_h = (time.time() * 1000 - trade['signal_ts_ms']) / 3600000
     if age_h > TRADE_EXPIRY_HOURS:
-        finish('EXPIRED', None)
+        finish('EXPIRED', None, get_pakistan_time())
         return True
     return False
 
@@ -672,6 +727,7 @@ def analyze_and_build_signal(symbol, is_futures=False):
         'direction': trend,
         'entry': price,
         'sl': sl,
+        'sl_orig': sl,
         'tp1': tp1,
         'tp2': tp2,
         'tp1_hit': False,
@@ -723,7 +779,9 @@ def scan_signals():
         logger.info(f"✅ Signal sent: {coin} (score {data['score']}, {len(candidates)} candidates)")
 
 def send_daily_summary():
-    send_admin_msg(build_daily_summary())
+    for part in split_message(build_daily_summary()):
+        send_admin_msg(part)
+        time.sleep(1)
     logger.info("📊 Daily summary sent")
 
 # ================== MAIN ==================
