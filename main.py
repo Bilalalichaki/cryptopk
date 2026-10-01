@@ -34,10 +34,10 @@ WATCHLIST = [
 FUTURES_WATCHLIST = []
 
 COOLDOWN_SECONDS        = 7200
-SIGNAL_SCAN_INTERVAL    = 900 #15min
+SIGNAL_SCAN_INTERVAL    = 900
 TP_SL_CHECK_INTERVAL    = 30
 MIN_AI_SCORE            = 120
-GLOBAL_COOLDOWN_SECONDS = 900   # ← 15 min (changed from 3600)
+GLOBAL_COOLDOWN_SECONDS = 900
 DAILY_SUMMARY_HOUR      = 23
 
 VOLUME_FILTER_ENABLED = True
@@ -58,12 +58,11 @@ daily_stats             = {
     'tp2_hits': 0,
     'sl_hits': 0,
     'pending': 0,
-    'trade_details': []   # ← NEW
+    'trade_details': []
 }
 state_lock              = threading.Lock()
 last_global_signal_time = 0
 last_daily_summary_date = None
-
 
 
 def get_pakistan_time():
@@ -79,6 +78,7 @@ def get_pakistan_date():
 def get_pakistan_hour():
     pkt = ZoneInfo('Asia/Karachi')
     return datetime.now(pkt).hour
+
 
 def round_price(p):
     if p >= 1000:     return round(p, 2)
@@ -316,7 +316,7 @@ def reset_daily_stats_if_needed():
             'tp2_hits': 0,
             'sl_hits': 0,
             'pending': 0,
-            'trade_details': []   # ← NEW
+            'trade_details': []
         }
 
 
@@ -361,7 +361,6 @@ def build_daily_summary():
         f"═══════════════════════════════\n"
     )
     
-    # Trade Details
     details = stats.get('trade_details', [])
     if details:
         msg += f"\n📋 *TRADE DETAILS:*\n\n"
@@ -381,7 +380,6 @@ def build_daily_summary():
             )
         msg += f"═══════════════════════════════\n"
         
-        # Best / Worst
         coin_wins = {}
         coin_total = {}
         for trade in details:
@@ -445,13 +443,12 @@ def check_active_trade_results():
                 )
                 trade['tp2_hit'] = True
                 daily_stats['tp2_hits'] += 1
-                # Trade detail
                 daily_stats['trade_details'].append({
                     'coin': pair, 'direction': 'LONG',
                     'entry': trade['entry'], 'exit_price': trade['tp2'],
                     'result': 'TP2', 'time': get_pakistan_time()
                 })
-                sent_history[pair] = time.time()   # ← Cooldown reset
+                sent_history[pair] = time.time()
                 remove = True
             elif recent_high >= trade['tp1'] and not trade['tp1_hit']:
                 send_telegram_msg(
@@ -472,7 +469,7 @@ def check_active_trade_results():
                     'entry': trade['entry'], 'exit_price': trade['tp1'],
                     'result': 'TP1', 'time': get_pakistan_time()
                 })
-                sent_history[pair] = time.time()   # ← Cooldown reset
+                sent_history[pair] = time.time()
             elif recent_low <= trade['sl']:
                 send_telegram_msg(
                     f"🛑 *STOP LOSS HIT* 🛑\n\n"
@@ -488,7 +485,7 @@ def check_active_trade_results():
                     'entry': trade['entry'], 'exit_price': trade['sl'],
                     'result': 'SL', 'time': get_pakistan_time()
                 })
-                sent_history[pair] = time.time()   # ← Cooldown reset
+                sent_history[pair] = time.time()
                 remove = True
 
         elif d == 'SHORT':
@@ -584,51 +581,31 @@ def analyze_and_build_signal(symbol, is_futures=False):
         return None
     
     # ==========================================
-    # INDICATOR-BASED SL/TP (Bollinger + SAR + EMA20)
+    # FIXED SL/TP — ATR-Based + Minimum 2% Distance
+    # Whipsaw se bachne ke liye
     # ==========================================
     close = df_15m['close']
-    sma20 = close.rolling(20).mean()
-    std20 = close.rolling(20).std()
-    ema20 = close.ewm(span=20, adjust=False).mean()
-    
-    bb_upper  = (sma20 + 2*std20).iloc[-1]
-    bb_middle = sma20.iloc[-1]
-    bb_lower  = (sma20 - 2*std20).iloc[-1]
-    ema20_val = ema20.iloc[-1]
-    
-    sar_df    = calculate_parabolic_sar(df_15m)
-    sar_value = sar_df['sar'].iloc[-1]
-    
     price = close.iloc[-1]
+    
+    atr_series = calculate_atr(df_15m, ATR_PERIOD)
+    atr = atr_series.iloc[-1]
+    if pd.isna(atr) or atr <= 0:
+        return None
+    
+    min_sl_distance = price * 0.02
     
     if trend == "LONG":
         badge = "🟢 *BUY / LONG SIGNAL* 🟢"
-        # SL = jo neeche hai (SAR ya BB Lower)
-        sl  = round_price(min(sar_value, bb_lower))
-        # TP1 = EMA20 ya BB Middle (jo upar hai)
-        tp1 = round_price(max(ema20_val, bb_middle))
-        # TP2 = BB Upper
-        tp2 = round_price(bb_upper)
-        
-        # Safety check — sl price se neeche hona chahiye, tp upar
-        if sl >= price:
-            sl = round_price(price * 0.985)
-        if tp1 <= price:
-            tp1 = round_price(price * 1.015)
-        if tp2 <= tp1:
-            tp2 = round_price(tp1 * 1.015)
+        sl_distance = max(2.0 * atr, min_sl_distance)
+        sl  = round_price(price - sl_distance)
+        tp1 = round_price(price + (2.5 * atr))
+        tp2 = round_price(price + (4.0 * atr))
     else:
         badge = "🔴 *SELL / SHORT SIGNAL* 🔴"
-        sl  = round_price(max(sar_value, bb_upper))
-        tp1 = round_price(min(ema20_val, bb_middle))
-        tp2 = round_price(bb_lower)
-        
-        if sl <= price:
-            sl = round_price(price * 1.015)
-        if tp1 >= price:
-            tp1 = round_price(price * 0.985)
-        if tp2 >= tp1:
-            tp2 = round_price(tp1 * 0.985)
+        sl_distance = max(2.0 * atr, min_sl_distance)
+        sl  = round_price(price + sl_distance)
+        tp1 = round_price(price - (2.5 * atr))
+        tp2 = round_price(price - (4.0 * atr))
     
     pair = symbol.replace('USDT', '')
     if pair in ['PAXG', 'XAU']:
@@ -702,7 +679,7 @@ def main_loop():
     logger.info(f"🎯 Min Score: {MIN_AI_SCORE}")
     logger.info(f"📊 Volume Threshold: {VOLUME_THRESHOLD}")
     logger.info(f"⏸️ Global Cooldown: {GLOBAL_COOLDOWN_SECONDS}s ({GLOBAL_COOLDOWN_SECONDS//60} min)")
-    logger.info(f"💰 SL/TP: Indicator-Based (Bollinger + SAR + EMA20)")
+    logger.info(f"💰 SL/TP: ATR-Based (SL=2.0x, TP1=2.5x, TP2=4.0x)")
     last_signal_scan = 0
     while True:
         try:
@@ -742,7 +719,7 @@ def status():
         "timeframes": "15m + 1h",
         "min_score": MIN_AI_SCORE,
         "global_cooldown": GLOBAL_COOLDOWN_SECONDS,
-        "sl_tp_method": "Indicator-Based (Bollinger + SAR + EMA20)",
+        "sl_tp_method": "ATR-Based (SL=2.0x, TP1=2.5x, TP2=4.0x)",
         "time": get_pakistan_time()
     }, 200
 
