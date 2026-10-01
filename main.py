@@ -1,12 +1,17 @@
 import os
 import time
+import json
 import requests
 import pandas as pd
-from datetime import datetime, timedelta
+import numpy as np
+from datetime import datetime
 from zoneinfo import ZoneInfo
 import threading
 import logging
 from flask import Flask
+from sklearn.ensemble import RandomForestClassifier
+import warnings
+warnings.filterwarnings("ignore")
 
 logging.basicConfig(
     level=logging.INFO,
@@ -17,68 +22,68 @@ logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
 
+# ================== CONFIG ==================
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "xxxx")
 TELEGRAM_CHAT_ID   = os.environ.get("TELEGRAM_CHAT_ID",   "xxxx")
-TELEGRAM_ADMIN_ID  = os.environ.get("TELEGRAM_ADMIN_ID",  "5846593253")
+TELEGRAM_ADMIN_ID  = os.environ.get("TELEGRAM_ADMIN_ID",  "xxxx")
 
 if TELEGRAM_BOT_TOKEN == "xxxx" or TELEGRAM_CHAT_ID == "xxxx":
     raise SystemExit("❌ Render pe TELEGRAM_BOT_TOKEN & TELEGRAM_CHAT_ID set karo!")
 
 PROXIES = None
+# Render pe persistent disk mount karo (e.g. /data) aur STATE_FILE=/data/bot_state.json set karo
+STATE_FILE = os.environ.get("STATE_FILE", "bot_state.json")
 
 WATCHLIST = [
     'BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'BNBUSDT', 'XRPUSDT',
     'ADAUSDT', 'DOGEUSDT', 'LTCUSDT', 'DOTUSDT', 'BCHUSDT',
     'ZECUSDT', 'PEPEUSDT', 'PAXGUSDT', 'ICPUSDT',
 ]
-FUTURES_WATCHLIST = []
 
 COOLDOWN_SECONDS        = 7200
 SIGNAL_SCAN_INTERVAL    = 900
 TP_SL_CHECK_INTERVAL    = 30
-MIN_AI_SCORE            = 70
+MIN_FINAL_SCORE         = 72
 GLOBAL_COOLDOWN_SECONDS = 900
 DAILY_SUMMARY_HOUR      = 23
+TRADE_EXPIRY_HOURS      = 48
 
 VOLUME_FILTER_ENABLED = True
 VOLUME_THRESHOLD      = 0.8
+VOLUME_FILTER_TFS     = ('15m', '1h')   # 4h/1d pe volume filter nahi
 
-ATR_PERIOD           = 14
-SL_ATR_MULTIPLIER    = 2.0
-TP1_ATR_MULTIPLIER   = 2.5
-TP2_ATR_MULTIPLIER   = 4.0
+MIN_ALIGNED_TF = 3          # kam az kam itne timeframes ek direction mein
 
+# Risk model: SL distance se TP nikalte hain, taake RR hamesha fixed rahe
+ATR_PERIOD    = 14
+SL_ATR_MULT   = 1.5
+MIN_SL_PCT    = 0.006       # SL kam az kam 0.6% door
+TP1_R         = 1.2         # TP1 = 1.2R
+TP2_R         = 2.5         # TP2 = 2.5R
+
+AI_MIN_ACCURACY = 0.52      # holdout accuracy is se kam ho to AI ko ignore karo
+
+# ================== STATE ==================
 sent_history            = {}
 active_trades           = {}
 trade_log               = []
 daily_stats             = {
-    'date': None,
-    'signals': 0,
-    'tp1_hits': 0,
-    'tp2_hits': 0,
-    'sl_hits': 0,
-    'pending': 0,
-    'trade_details': []
+    'date': None, 'signals': 0, 'tp1_hits': 0, 'tp2_hits': 0,
+    'sl_hits': 0, 'pending': 0, 'trade_details': []
 }
-state_lock              = threading.Lock()
+state_lock              = threading.RLock()
 last_global_signal_time = 0
 last_daily_summary_date = None
 
-
+# ================== HELPERS ==================
 def get_pakistan_time():
-    pkt = ZoneInfo('Asia/Karachi')
-    return datetime.now(pkt).strftime("%d-%b-%Y | %I:%M %p")
-
+    return datetime.now(ZoneInfo('Asia/Karachi')).strftime("%d-%b-%Y | %I:%M %p")
 
 def get_pakistan_date():
-    pkt = ZoneInfo('Asia/Karachi')
-    return datetime.now(pkt).strftime("%d-%b-%Y")
-
+    return datetime.now(ZoneInfo('Asia/Karachi')).strftime("%d-%b-%Y")
 
 def get_pakistan_hour():
-    pkt = ZoneInfo('Asia/Karachi')
-    return datetime.now(pkt).hour
-
+    return datetime.now(ZoneInfo('Asia/Karachi')).hour
 
 def round_price(p):
     if p >= 1000:     return round(p, 2)
@@ -87,6 +92,62 @@ def round_price(p):
     elif p >= 0.0001: return round(p, 6)
     else:             return round(p, 8)
 
+def coin_name(symbol):
+    pair = symbol.replace('USDT', '')
+    return 'XAU / GOLD' if pair in ('PAXG', 'XAU') else pair
+
+# ================== PERSISTENCE ==================
+def save_state():
+    try:
+        with state_lock:
+            data = {
+                "sent_history": sent_history,
+                "active_trades": active_trades,
+                "daily_stats": daily_stats,
+                "trade_log": trade_log[-30:],
+                "last_global_signal_time": last_global_signal_time,
+                "last_daily_summary_date": last_daily_summary_date
+            }
+            payload = json.dumps(data, default=str)
+        tmp = STATE_FILE + ".tmp"
+        with open(tmp, "w") as f:
+            f.write(payload)
+        os.replace(tmp, STATE_FILE)   # atomic write
+    except Exception as e:
+        logger.error(f"Save state error: {e}")
+
+def load_state():
+    global sent_history, active_trades, daily_stats, trade_log
+    global last_global_signal_time, last_daily_summary_date
+    try:
+        if os.path.exists(STATE_FILE):
+            with open(STATE_FILE, "r") as f:
+                data = json.load(f)
+            with state_lock:
+                sent_history = data.get("sent_history", {})
+                active_trades = data.get("active_trades", {})
+                daily_stats = data.get("daily_stats", daily_stats)
+                trade_log = data.get("trade_log", [])
+                last_global_signal_time = data.get("last_global_signal_time", 0)
+                last_daily_summary_date = data.get("last_daily_summary_date", None)
+            logger.info(f"✅ State loaded | Active trades: {len(active_trades)}")
+    except Exception as e:
+        logger.error(f"Load state error: {e}")
+
+# ================== DATA ==================
+KLINE_COLS = ['time', 'open', 'high', 'low', 'close', 'volume', 'close_time',
+              '_1', '_2', '_3', '_4', '_5']
+
+def _to_df(data):
+    df = pd.DataFrame(data, columns=KLINE_COLS)
+    for c in ['open', 'high', 'low', 'close', 'volume']:
+        df[c] = df[c].astype(float)
+    df['time'] = df['time'].astype('int64')
+    df['close_time'] = df['close_time'].astype('int64')
+    # sirf CLOSED candles rakho (chalti hui candle hata do)
+    now_ms = int(time.time() * 1000)
+    df = df[df['close_time'] < now_ms].reset_index(drop=True)
+    return df
 
 def fetch_klines(symbol, timeframe, limit=100, futures=False):
     try:
@@ -97,28 +158,43 @@ def fetch_klines(symbol, timeframe, limit=100, futures=False):
         res = requests.get(url, proxies=PROXIES, timeout=10)
         data = res.json()
         if isinstance(data, dict) or not data:
-            logger.warning(f"[fetch_klines] Bad response {symbol}: {str(data)[:150]}")
             return None
-        df = pd.DataFrame(data, columns=[
-            'time', 'open', 'high', 'low', 'close', 'volume',
-            '_1', '_2', '_3', '_4', '_5', '_6'
-        ])
-        for c in ['open', 'high', 'low', 'close', 'volume']:
-            df[c] = df[c].astype(float)
-        return df
+        return _to_df(data)
     except Exception as e:
         logger.error(f"[fetch_klines] {symbol} {timeframe}: {e}")
         return None
 
+def fetch_klines_since(symbol, start_ms, interval='1m'):
+    """start_ms ke baad ki closed candles (TP/SL tracking ke liye)"""
+    try:
+        url = (f"https://data-api.binance.vision/api/v3/klines?symbol={symbol}"
+               f"&interval={interval}&startTime={int(start_ms)}&limit=1000")
+        res = requests.get(url, proxies=PROXIES, timeout=10)
+        data = res.json()
+        if isinstance(data, dict):
+            return None
+        if not data:
+            return pd.DataFrame(columns=KLINE_COLS)
+        return _to_df(data)
+    except Exception as e:
+        logger.error(f"[fetch_since] {symbol}: {e}")
+        return None
+
+def fetch_live_price(symbol):
+    try:
+        url = f"https://data-api.binance.vision/api/v3/ticker/price?symbol={symbol}"
+        res = requests.get(url, proxies=PROXIES, timeout=10)
+        return float(res.json()['price'])
+    except Exception as e:
+        logger.error(f"[live_price] {symbol}: {e}")
+        return None
 
 def calculate_atr(df, period=14):
     high_low   = df['high'] - df['low']
     high_close = (df['high'] - df['close'].shift()).abs()
     low_close  = (df['low']  - df['close'].shift()).abs()
-    tr  = pd.concat([high_low, high_close, low_close], axis=1).max(axis=1)
-    atr = tr.rolling(period).mean()
-    return atr
-
+    tr = pd.concat([high_low, high_close, low_close], axis=1).max(axis=1)
+    return tr.rolling(period).mean()
 
 def calculate_parabolic_sar(df, af_start=0.02, af_step=0.02, af_max=0.2):
     high = df['high'].values
@@ -128,9 +204,8 @@ def calculate_parabolic_sar(df, af_start=0.02, af_step=0.02, af_max=0.2):
     trend = [1] * n
     ep    = [0.0] * n
     af    = [af_start] * n
-    sar[0]   = low[0]
-    ep[0]    = high[0]
-    trend[0] = 1
+    sar[0] = low[0]
+    ep[0]  = high[0]
     for i in range(1, n):
         sar[i] = sar[i-1] + af[i-1] * (ep[i-1] - sar[i-1])
         if trend[i-1] == 1:
@@ -149,7 +224,7 @@ def calculate_parabolic_sar(df, af_start=0.02, af_step=0.02, af_max=0.2):
                     af[i] = af[i-1]
                 if i >= 2:
                     sar[i] = min(sar[i], low[i-1], low[i-2])
-                elif i >= 1:
+                else:
                     sar[i] = min(sar[i], low[i-1])
         else:
             if high[i] > sar[i]:
@@ -167,46 +242,111 @@ def calculate_parabolic_sar(df, af_start=0.02, af_step=0.02, af_max=0.2):
                     af[i] = af[i-1]
                 if i >= 2:
                     sar[i] = max(sar[i], high[i-1], high[i-2])
-                elif i >= 1:
+                else:
                     sar[i] = max(sar[i], high[i-1])
     df = df.copy()
-    df['sar']       = sar
+    df['sar'] = sar
     df['sar_trend'] = trend
     return df
 
+# ================== AI ==================
+AI_FEATURES = ['ema_diff', 'rsi', 'macd_hist', 'vol_ratio', 'returns', 'atr_pct', 'sar_trend']
 
-# ==========================================
-# AI ANALYSIS — 5 INDICATORS
-# ==========================================
+def build_features(df):
+    df = df.copy()
+    close = df['close']
+    volume = df['volume']
+
+    df['ema20'] = close.ewm(span=20, adjust=False).mean()
+    df['ema50'] = close.ewm(span=50, adjust=False).mean()
+    df['ema_diff'] = (df['ema20'] - df['ema50']) / close
+
+    delta = close.diff()
+    gain = delta.where(delta > 0, 0).rolling(14).mean()
+    loss = (-delta.where(delta < 0, 0)).rolling(14).mean()
+    rs = gain / (loss + 1e-10)
+    df['rsi'] = 100 - (100 / (1 + rs))
+
+    ema12 = close.ewm(span=12, adjust=False).mean()
+    ema26 = close.ewm(span=26, adjust=False).mean()
+    macd = ema12 - ema26
+    signal = macd.ewm(span=9, adjust=False).mean()
+    df['macd_hist'] = (macd - signal) / close
+
+    df['vol_ratio'] = volume / (volume.rolling(20).mean() + 1e-10)
+    df['returns'] = close.pct_change()
+    df['atr'] = calculate_atr(df, 14)
+    df['atr_pct'] = df['atr'] / close
+    df['sar_trend'] = calculate_parabolic_sar(df)['sar_trend']
+    return df
+
+def ai_predict_direction(df, horizon=3):
+    """
+    Returns (confidence, direction). Direction: LONG / SHORT / NEUTRAL.
+    - Train sirf un rows pe jinka future result maloom hai (last `horizon` rows nahi)
+    - Predict LATEST closed candle pe
+    - Holdout accuracy kam ho to model ko unreliable maan ke NEUTRAL (0.5) return
+    """
+    try:
+        if df is None or len(df) < 150:
+            return 0.5, "NEUTRAL"
+
+        feat = build_features(df)
+        feat['future_return'] = feat['close'].shift(-horizon) / feat['close'] - 1
+        feat = feat.dropna(subset=AI_FEATURES)
+        if len(feat) < 120:
+            return 0.5, "NEUTRAL"
+
+        latest_x = feat[AI_FEATURES].iloc[[-1]].values        # current candle
+        labeled = feat.dropna(subset=['future_return'])        # known outcomes only
+        X = labeled[AI_FEATURES].values
+        y = (labeled['future_return'] > 0).astype(int).values
+        if len(X) < 100 or len(np.unique(y)) < 2:
+            return 0.5, "NEUTRAL"
+
+        # time-ordered holdout check (purge `horizon` rows beech mein)
+        split = int(len(X) * 0.8)
+        m_val = RandomForestClassifier(n_estimators=60, max_depth=5, min_samples_leaf=5,
+                                       random_state=42, n_jobs=1)
+        m_val.fit(X[:split - horizon], y[:split - horizon])
+        acc = (m_val.predict(X[split:]) == y[split:]).mean()
+        if acc < AI_MIN_ACCURACY:
+            return 0.5, "NEUTRAL"
+
+        model = RandomForestClassifier(n_estimators=60, max_depth=5, min_samples_leaf=5,
+                                       random_state=42, n_jobs=1)
+        model.fit(X, y)
+        proba = model.predict_proba(latest_x)[0]
+        long_prob = proba[1] if len(proba) > 1 else 0.5
+
+        if long_prob >= 0.60:
+            return long_prob, "LONG"
+        if long_prob <= 0.40:
+            return 1 - long_prob, "SHORT"
+        return 0.5, "NEUTRAL"
+    except Exception as e:
+        logger.error(f"AI error: {e}")
+        return 0.5, "NEUTRAL"
+
+# ================== TECHNICAL ANALYSIS ==================
 def analyze_tf(df, timeframe_label=""):
-    """
-    5-Indicator AI Analysis:
-    - EMA 20 + EMA 50 (Trend) — 30 points
-    - RSI (Momentum) — 25 points
-    - Volume (Confirmation) — 20 points
-    - MACD (Momentum confirm) — 15 points
-    - SAR (Reversal) — 10 points
-    Total = 100 points
-    """
     if df is None or len(df) < 50:
         return 0, "NEUTRAL"
 
-    close  = df['close']
+    close = df['close']
     volume = df['volume']
+    avg_vol = volume.rolling(20).mean().iloc[-1]
 
-    if VOLUME_FILTER_ENABLED:
-        avg_volume     = volume.rolling(20).mean().iloc[-1]
-        current_volume = volume.iloc[-1]
-        if current_volume < (avg_volume * VOLUME_THRESHOLD):
+    if VOLUME_FILTER_ENABLED and timeframe_label in VOLUME_FILTER_TFS:
+        if volume.iloc[-1] < avg_vol * VOLUME_THRESHOLD:
             return 0, "NEUTRAL"
 
     bull, bear = 0, 0
     price = close.iloc[-1]
 
-    # ========== 1. EMA 20 + EMA 50 (30 pts) ==========
+    # EMA
     ema20 = close.ewm(span=20, adjust=False).mean()
     ema50 = close.ewm(span=50, adjust=False).mean()
-
     if price > ema20.iloc[-1] > ema50.iloc[-1]:
         bull += 30
     elif price > ema20.iloc[-1]:
@@ -216,61 +356,46 @@ def analyze_tf(df, timeframe_label=""):
     elif price < ema20.iloc[-1]:
         bear += 15
 
-    # ========== 2. RSI (25 pts) ==========
+    # RSI
     delta = close.diff()
-    gain  = (delta.where(delta > 0, 0)).rolling(14).mean()
-    loss  = (-delta.where(delta < 0, 0)).rolling(14).mean()
-    rs    = gain / loss
-    rsi   = 100 - (100 / (1 + rs))
-    rsi_val = rsi.iloc[-1]
+    gain = (delta.where(delta > 0, 0)).rolling(14).mean()
+    loss = (-delta.where(delta < 0, 0)).rolling(14).mean()
+    rs = gain / (loss + 1e-10)
+    rsi_val = (100 - (100 / (1 + rs))).iloc[-1]
 
-    if rsi_val < 30:
-        bull += 25
-    elif rsi_val < 45:
-        bull += 12
-    elif rsi_val > 70:
-        bear += 25
-    elif rsi_val > 55:
-        bear += 12
+    if rsi_val < 30:   bull += 25
+    elif rsi_val < 45: bull += 12
+    elif rsi_val > 70: bear += 25
+    elif rsi_val > 55: bear += 12
 
-    # ========== 3. Volume (20 pts) ==========
-    avg_vol = volume.rolling(20).mean().iloc[-1]
-    cur_vol = volume.iloc[-1]
-
-    if cur_vol > avg_vol * 1.3:
+    # Volume
+    if volume.iloc[-1] > avg_vol * 1.3:
         if bull > bear:   bull += 20
         elif bear > bull: bear += 20
 
-    # ========== 4. MACD (15 pts) ==========
+    # MACD
     ema12 = close.ewm(span=12, adjust=False).mean()
     ema26 = close.ewm(span=26, adjust=False).mean()
-    macd_line   = ema12 - ema26
+    macd_line = ema12 - ema26
     signal_line = macd_line.ewm(span=9, adjust=False).mean()
-    histogram   = macd_line - signal_line
-
-    if macd_line.iloc[-1] > signal_line.iloc[-1] and histogram.iloc[-1] > 0:
+    hist = macd_line - signal_line
+    if hist.iloc[-1] > 0:
         bull += 15
-    elif macd_line.iloc[-1] < signal_line.iloc[-1] and histogram.iloc[-1] < 0:
+    elif hist.iloc[-1] < 0:
         bear += 15
 
-    # ========== 5. SAR (10 pts) ==========
+    # SAR
     sar_df = calculate_parabolic_sar(df)
-    sar_val = sar_df['sar'].iloc[-1]
-    sar_trend = sar_df['sar_trend'].iloc[-1]
-
-    if sar_trend == 1 and sar_val < price:
+    if sar_df['sar_trend'].iloc[-1] == 1 and sar_df['sar'].iloc[-1] < price:
         bull += 10
-    elif sar_trend == -1 and sar_val > price:
+    elif sar_df['sar_trend'].iloc[-1] == -1 and sar_df['sar'].iloc[-1] > price:
         bear += 10
 
-    # ========== FINAL ==========
-    if bull > bear:
-        return bull, "LONG"
-    elif bear > bull:
-        return bear, "SHORT"
+    if bull > bear: return bull, "LONG"
+    if bear > bull: return bear, "SHORT"
     return 0, "NEUTRAL"
 
-
+# ================== TELEGRAM ==================
 def send_telegram_msg(msg, reply_to=None):
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
     payload = {'chat_id': TELEGRAM_CHAT_ID, 'text': msg, 'parse_mode': 'Markdown'}
@@ -279,78 +404,58 @@ def send_telegram_msg(msg, reply_to=None):
     try:
         res = requests.post(url, json=payload, proxies=PROXIES, timeout=30)
         if res.status_code != 200:
-            logger.error(f"[Telegram-Ch] {res.status_code}: {res.text[:200]}")
+            logger.error(f"[Telegram] {res.status_code}: {res.text[:200]}")
             return None
         return res.json().get('result', {}).get('message_id')
     except Exception as e:
-        logger.error(f"[Telegram-Ch] Exception: {e}")
+        logger.error(f"[Telegram] {e}")
         return None
 
-
 def send_admin_msg(msg):
+    if TELEGRAM_ADMIN_ID == "xxxx":
+        return None
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
     payload = {'chat_id': TELEGRAM_ADMIN_ID, 'text': msg, 'parse_mode': 'Markdown'}
     try:
         res = requests.post(url, json=payload, proxies=PROXIES, timeout=30)
-        if res.status_code != 200:
-            logger.error(f"[Telegram-Admin] {res.status_code}: {res.text[:200]}")
-            return None
-        return res.json().get('result', {}).get('message_id')
-    except Exception as e:
-        logger.error(f"[Telegram-Admin] Exception: {e}")
+        return res.json().get('result', {}).get('message_id') if res.status_code == 200 else None
+    except Exception:
         return None
 
-
+# ================== STATS ==================
 def reset_daily_stats_if_needed():
     global daily_stats
     today = get_pakistan_date()
-    if daily_stats.get('date') != today:
-        if daily_stats.get('date') is not None:
-            save_day_to_log()
-        daily_stats = {
-            'date': today,
-            'signals': 0,
-            'tp1_hits': 0,
-            'tp2_hits': 0,
-            'sl_hits': 0,
-            'pending': 0,
-            'trade_details': []
-        }
-
-
-def save_day_to_log():
-    global daily_stats
-    if daily_stats.get('date'):
-        trade_log.append(daily_stats.copy())
-        logger.info(f"📝 Day saved to log: {daily_stats['date']}")
-
+    with state_lock:
+        if daily_stats.get('date') != today:
+            if daily_stats.get('date') is not None:
+                trade_log.append(daily_stats.copy())
+            daily_stats = {
+                'date': today, 'signals': 0, 'tp1_hits': 0, 'tp2_hits': 0,
+                'sl_hits': 0, 'pending': len(active_trades), 'trade_details': []
+            }
+    save_state()
 
 def get_win_rate(stats=None):
-    if stats is None:
-        stats = daily_stats
-    total_closed = stats['tp1_hits'] + stats['tp2_hits'] + stats['sl_hits']
-    if total_closed == 0:
-        return 0, 0
-    wins = stats['tp1_hits'] + stats['tp2_hits']
-    rate = (wins / total_closed) * 100
-    return round(rate, 1), total_closed
-
+    """Win = TP1 tak pohanchne wala trade (TP2 wale bhi TP1 cross karte hain, isliye double count nahi)."""
+    if stats is None: stats = daily_stats
+    wins = stats['tp1_hits']
+    total = wins + stats['sl_hits']
+    if total == 0: return 0, 0
+    return round(wins / total * 100, 1), total
 
 def build_daily_summary():
-    stats = daily_stats
+    with state_lock:
+        stats = json.loads(json.dumps(daily_stats))
     win_rate, total_closed = get_win_rate(stats)
-    if total_closed == 0:     emoji = "😐"
-    elif win_rate >= 70:      emoji = "🎉"
-    elif win_rate >= 60:      emoji = "✅"
-    elif win_rate >= 50:      emoji = "😊"
-    else:                     emoji = "⚠️"
+    emoji = "🎉" if win_rate >= 70 else "✅" if win_rate >= 60 else "😊" if win_rate >= 50 else "⚠️" if total_closed > 0 else "😐"
 
     msg = (
         f"📊 *DAILY SUMMARY — {stats['date']}*\n"
         f"═══════════════════════════════\n\n"
         f"📈 *Total Signals:* `{stats['signals']}`\n\n"
-        f"✅ *TP1 Hits:* `{stats['tp1_hits']}`\n"
-        f"✅ *TP2 Hits:* `{stats['tp2_hits']}`\n"
+        f"✅ *TP1 Hits:* `{stats['tp1_hits']}` (TP2 included)\n"
+        f"🏆 *TP2 Hits:* `{stats['tp2_hits']}`\n"
         f"🛑 *SL Hits:* `{stats['sl_hits']}`\n"
         f"⏳ *Pending:* `{stats['pending']}`\n\n"
         f"═══════════════════════════════\n"
@@ -358,295 +463,196 @@ def build_daily_summary():
         f"📊 *Closed Trades:* `{total_closed}`\n"
         f"═══════════════════════════════\n"
     )
-
     details = stats.get('trade_details', [])
     if details:
-        msg += f"\n📋 *TRADE DETAILS:*\n\n"
-        for i, trade in enumerate(details[:10], 1):
-            dir_emoji = "🟢" if trade.get('direction') == 'LONG' else "🔴"
-            result = trade.get('result', 'PENDING')
-            if result in ['TP1', 'TP2']:
-                res_emoji = "✅"
-            elif result == 'SL':
-                res_emoji = "❌"
-            else:
-                res_emoji = "⏳"
-
+        msg += "\n📋 *TRADE DETAILS:*\n\n"
+        for i, t in enumerate(details[:10], 1):
+            dir_emoji = "🟢" if t.get('direction') == 'LONG' else "🔴"
+            result = t.get('result', 'PENDING')
+            res_emoji = "✅" if result in ('TP1', 'TP2') else "❌" if result == 'SL' else "➖"
             msg += (
-                f"{i}. {dir_emoji} *{trade.get('coin', 'N/A')}* | {trade.get('direction', 'N/A')} | {result} {res_emoji}\n"
-                f"   Entry: `{trade.get('entry', 'N/A')}` | Exit: `{trade.get('exit_price', 'N/A')}`\n\n"
+                f"{i}. {dir_emoji} *{t.get('coin')}* | {t.get('direction')} | {result} {res_emoji}\n"
+                f"   Entry: `{t.get('entry')}` | Exit: `{t.get('exit_price')}`\n\n"
             )
-        msg += f"═══════════════════════════════\n"
-
-        coin_wins = {}
-        coin_total = {}
-        for trade in details:
-            coin = trade.get('coin', 'N/A')
-            coin_total[coin] = coin_total.get(coin, 0) + 1
-            if trade.get('result') in ['TP1', 'TP2']:
-                coin_wins[coin] = coin_wins.get(coin, 0) + 1
-
-        if coin_wins:
-            best = max(coin_wins.items(), key=lambda x: x[1])
-            msg += f"📊 *BEST:* {best[0]} ({best[1]}/{coin_total[best[0]]})\n"
-
-        coin_losses = {}
-        for trade in details:
-            if trade.get('result') == 'SL':
-                coin = trade.get('coin', 'N/A')
-                coin_losses[coin] = coin_losses.get(coin, 0) + 1
-
-        if coin_losses:
-            worst = max(coin_losses.items(), key=lambda x: x[1])
-            msg += f"📊 *WORST:* {worst[0]} ({worst[1]} SL)\n"
-
-        msg += f"═══════════════════════════════"
-
     return msg
 
+# ================== TRADE TRACKING ==================
+def _hit_msg(kind, trade, pair, price):
+    side = "*LONG* 🟢" if trade['direction'] == 'LONG' else "*SHORT* 🔴"
+    head = f"📌 *Pair:* `{pair}` | {side}\n💰 *Entry:* `{trade['entry']}`\n"
+    foot = (f"\n\n📅 *Signal Time:* `{trade.get('signal_time', 'N/A')}`\n"
+            f"⏰ *Hit Time:* `{get_pakistan_time()}`")
+    if kind == 'TP1':
+        return ("✅ *SUCCESSFUL HIT — TARGET 1* ✅\n\n🎯 *TRADE IN PROFIT!*\n\n" + head +
+                f"✅ *TP1:* `{price}`\n\n💡 *SL ab entry pe move ho gaya — risk-free trade!*" + foot)
+    if kind == 'TP2':
+        return ("✅ *SUCCESSFUL HIT — TARGET 2 (FULL TP)* ✅\n\n🔥🔥🔥 *PERFECT TRADE!* 🔥🔥🔥\n\n" + head +
+                f"✅ *TP2:* `{price}`" + foot)
+    if kind == 'SL':
+        return ("🛑 *STOP LOSS HIT* 🛑\n\n" + head + f"❌ *SL:* `{price}`" + foot)
+    if kind == 'BE':
+        return ("➖ *CLOSED AT ENTRY (BREAKEVEN)* ➖\n\nTP1 hit ho chuka tha, baaki position entry pe close.\n\n" + head + foot)
+    return ("⌛ *SIGNAL EXPIRED* ⌛\n\nTarget/SL nahi laga, trade expire.\n\n" + head + foot)
+
+def _is_long(trade):
+    return trade['direction'] == 'LONG'
+
+def process_trade_candles(symbol, trade, df, outbox):
+    """
+    Closed 1m candles ko time order mein process karta hai.
+    Ek hi candle mein SL aur TP dono touch hon to SL pehle maana jata hai (conservative).
+    Returns True agar trade close ho gaya.
+    """
+    pair = coin_name(symbol)
+    is_long = _is_long(trade)
+    reply = trade.get('signal_message_id')
+
+    def finish(kind, price):
+        outbox.append((_hit_msg(kind, trade, pair, price), reply))
+        if kind == 'SL':
+            daily_stats['sl_hits'] += 1
+        if kind == 'TP2':
+            daily_stats['tp2_hits'] += 1
+        daily_stats['trade_details'].append({
+            'coin': pair, 'direction': trade['direction'], 'entry': round_price(trade['entry']),
+            'exit_price': price, 'result': kind, 'time': get_pakistan_time()
+        })
+        sent_history[pair] = time.time()
+        if daily_stats['pending'] > 0:
+            daily_stats['pending'] -= 1
+
+    for _, c in df.iterrows():
+        hi, lo = c['high'], c['low']
+        sl_hit  = (lo <= trade['sl'])  if is_long else (hi >= trade['sl'])
+        tp1_hit = (hi >= trade['tp1']) if is_long else (lo <= trade['tp1'])
+        tp2_hit = (hi >= trade['tp2']) if is_long else (lo <= trade['tp2'])
+
+        if not trade['tp1_hit']:
+            if sl_hit:
+                finish('SL', trade['sl'])
+                return True
+            if tp1_hit:
+                trade['tp1_hit'] = True
+                trade['sl'] = round_price(trade['entry'])     # breakeven
+                daily_stats['tp1_hits'] += 1
+                outbox.append((_hit_msg('TP1', trade, pair, trade['tp1']), reply))
+                if tp2_hit:
+                    trade['tp2_hit'] = True
+                    finish('TP2', trade['tp2'])
+                    return True
+        else:
+            if sl_hit:
+                finish('BE', trade['entry'])
+                return True
+            if tp2_hit:
+                trade['tp2_hit'] = True
+                finish('TP2', trade['tp2'])
+                return True
+
+    # expiry
+    age_h = (time.time() * 1000 - trade['signal_ts_ms']) / 3600000
+    if age_h > TRADE_EXPIRY_HOURS:
+        finish('EXPIRED', None)
+        return True
+    return False
 
 def check_active_trade_results():
-    global daily_stats
     with state_lock:
         symbols = list(active_trades.keys())
+
     for symbol in symbols:
-        trade = active_trades.get(symbol)
-        if trade is None:
-            continue
-        is_futures = symbol in FUTURES_WATCHLIST
-        df = fetch_klines(symbol, '1m', limit=5, futures=is_futures)
+        with state_lock:
+            trade = active_trades.get(symbol)
+            if not trade:
+                continue
+            start = trade.get('last_checked_ms') or trade['signal_ts_ms']
+            start = int(start)
+
+        df = fetch_klines_since(symbol, start)      # network lock ke bahar
         if df is None:
             continue
-        recent_high = df['high'].iloc[-3:].max()
-        recent_low  = df['low'].iloc[-3:].min()
-        pair = symbol.replace('USDT', '')
-        if pair in ['PAXG', 'XAU']:
-            pair = 'XAU / GOLD'
-        d = trade['direction']
-        remove = False
-        sig_time   = trade.get('signal_time', 'N/A')
-        sig_msg_id = trade.get('signal_message_id')
 
-        if d == 'LONG':
-            if recent_high >= trade['tp2'] and not trade['tp2_hit']:
-                send_telegram_msg(
-                    f"✅ *SUCCESSFUL HIT — TARGET 2 (FULL TP)* ✅\n\n"
-                    f"🔥🔥🔥 *PERFECT TRADE!* 🔥🔥🔥\n\n"
-                    f"📌 *Pair:* `{pair}` | *LONG* 🟢\n"
-                    f"💰 *Entry:* `{trade['entry']}`\n"
-                    f"✅ *TP2:* `{trade['tp2']}`\n\n"
-                    f"📅 *Signal Time:* `{sig_time}`\n"
-                    f"⏰ *Hit Time:* `{get_pakistan_time()}`",
-                    reply_to=sig_msg_id
-                )
-                trade['tp2_hit'] = True
-                daily_stats['tp2_hits'] += 1
-                daily_stats['trade_details'].append({
-                    'coin': pair, 'direction': 'LONG',
-                    'entry': trade['entry'], 'exit_price': trade['tp2'],
-                    'result': 'TP2', 'time': get_pakistan_time()
-                })
-                sent_history[pair] = time.time()
-                remove = True
-            elif recent_high >= trade['tp1'] and not trade['tp1_hit']:
-                send_telegram_msg(
-                    f"✅ *SUCCESSFUL HIT — TARGET 1* ✅\n\n"
-                    f"🎯 *TRADE IN PROFIT!*\n\n"
-                    f"📌 *Pair:* `{pair}` | *LONG* 🟢\n"
-                    f"💰 *Entry:* `{trade['entry']}`\n"
-                    f"✅ *TP1:* `{trade['tp1']}`\n\n"
-                    f"💡 *Move SL to entry — risk-free trade now!*\n\n"
-                    f"📅 *Signal Time:* `{sig_time}`\n"
-                    f"⏰ *Hit Time:* `{get_pakistan_time()}`",
-                    reply_to=sig_msg_id
-                )
-                trade['tp1_hit'] = True
-                daily_stats['tp1_hits'] += 1
-                daily_stats['trade_details'].append({
-                    'coin': pair, 'direction': 'LONG',
-                    'entry': trade['entry'], 'exit_price': trade['tp1'],
-                    'result': 'TP1', 'time': get_pakistan_time()
-                })
-                sent_history[pair] = time.time()
-            elif recent_low <= trade['sl']:
-                send_telegram_msg(
-                    f"🛑 *STOP LOSS HIT* 🛑\n\n"
-                    f"📌 *Pair:* `{pair}` | *LONG* 🟢\n"
-                    f"❌ *SL:* `{trade['sl']}`\n\n"
-                    f"📅 *Signal Time:* `{sig_time}`\n"
-                    f"⏰ *Hit Time:* `{get_pakistan_time()}`",
-                    reply_to=sig_msg_id
-                )
-                daily_stats['sl_hits'] += 1
-                daily_stats['trade_details'].append({
-                    'coin': pair, 'direction': 'LONG',
-                    'entry': trade['entry'], 'exit_price': trade['sl'],
-                    'result': 'SL', 'time': get_pakistan_time()
-                })
-                sent_history[pair] = time.time()
-                remove = True
-
-        elif d == 'SHORT':
-            if recent_low <= trade['tp2'] and not trade['tp2_hit']:
-                send_telegram_msg(
-                    f"✅ *SUCCESSFUL HIT — TARGET 2 (FULL TP)* ✅\n\n"
-                    f"🔥🔥🔥 *PERFECT TRADE!* 🔥🔥🔥\n\n"
-                    f"📌 *Pair:* `{pair}` | *SHORT* 🔴\n"
-                    f"💰 *Entry:* `{trade['entry']}`\n"
-                    f"✅ *TP2:* `{trade['tp2']}`\n\n"
-                    f"📅 *Signal Time:* `{sig_time}`\n"
-                    f"⏰ *Hit Time:* `{get_pakistan_time()}`",
-                    reply_to=sig_msg_id
-                )
-                trade['tp2_hit'] = True
-                daily_stats['tp2_hits'] += 1
-                daily_stats['trade_details'].append({
-                    'coin': pair, 'direction': 'SHORT',
-                    'entry': trade['entry'], 'exit_price': trade['tp2'],
-                    'result': 'TP2', 'time': get_pakistan_time()
-                })
-                sent_history[pair] = time.time()
-                remove = True
-            elif recent_low <= trade['tp1'] and not trade['tp1_hit']:
-                send_telegram_msg(
-                    f"✅ *SUCCESSFUL HIT — TARGET 1* ✅\n\n"
-                    f"🎯 *TRADE IN PROFIT!*\n\n"
-                    f"📌 *Pair:* `{pair}` | *SHORT* 🔴\n"
-                    f"💰 *Entry:* `{trade['entry']}`\n"
-                    f"✅ *TP1:* `{trade['tp1']}`\n\n"
-                    f"💡 *Move SL to entry — risk-free trade now!*\n\n"
-                    f"📅 *Signal Time:* `{sig_time}`\n"
-                    f"⏰ *Hit Time:* `{get_pakistan_time()}`",
-                    reply_to=sig_msg_id
-                )
-                trade['tp1_hit'] = True
-                daily_stats['tp1_hits'] += 1
-                daily_stats['trade_details'].append({
-                    'coin': pair, 'direction': 'SHORT',
-                    'entry': trade['entry'], 'exit_price': trade['tp1'],
-                    'result': 'TP1', 'time': get_pakistan_time()
-                })
-                sent_history[pair] = time.time()
-            elif recent_high >= trade['sl']:
-                send_telegram_msg(
-                    f"🛑 *STOP LOSS HIT* 🛑\n\n"
-                    f"📌 *Pair:* `{pair}` | *SHORT* 🔴\n"
-                    f"❌ *SL:* `{trade['sl']}`\n\n"
-                    f"📅 *Signal Time:* `{sig_time}`\n"
-                    f"⏰ *Hit Time:* `{get_pakistan_time()}`",
-                    reply_to=sig_msg_id
-                )
-                daily_stats['sl_hits'] += 1
-                daily_stats['trade_details'].append({
-                    'coin': pair, 'direction': 'SHORT',
-                    'entry': trade['entry'], 'exit_price': trade['sl'],
-                    'result': 'SL', 'time': get_pakistan_time()
-                })
-                sent_history[pair] = time.time()
-                remove = True
-
-        if remove:
-            with state_lock:
+        outbox = []
+        closed = False
+        with state_lock:
+            trade = active_trades.get(symbol)
+            if not trade:
+                continue
+            if not df.empty:
+                closed = process_trade_candles(symbol, trade, df, outbox)
+                trade['last_checked_ms'] = int(df['time'].iloc[-1]) + 60000
+            else:
+                closed = process_trade_candles(symbol, trade, df, outbox)  # sirf expiry check
+            if closed:
                 active_trades.pop(symbol, None)
-                if daily_stats['pending'] > 0:
-                    daily_stats['pending'] -= 1
 
+        for msg, reply in outbox:
+            send_telegram_msg(msg, reply_to=reply)
+        save_state()
 
+# ================== SIGNAL ENGINE ==================
 def analyze_and_build_signal(symbol, is_futures=False):
-    # ==========================================
-    # 4 TIMEFRAMES: 15m + 1h + 4h + 1D
-    # ==========================================
-    df_15m = fetch_klines(symbol, '15m', futures=is_futures)
-    df_1h  = fetch_klines(symbol, '1h',  futures=is_futures)
+    df_15m = fetch_klines(symbol, '15m', limit=500, futures=is_futures)
+    df_1h  = fetch_klines(symbol, '1h',  limit=100, futures=is_futures)
     df_4h  = fetch_klines(symbol, '4h',  limit=100, futures=is_futures)
     df_1d  = fetch_klines(symbol, '1d',  limit=100, futures=is_futures)
 
-    if df_15m is None or df_1h is None or df_4h is None or df_1d is None:
+    if any(x is None for x in [df_15m, df_1h, df_4h, df_1d]):
         return None
 
-    s15, t15 = analyze_tf(df_15m, "15m")
-    s1h, t1h = analyze_tf(df_1h,  "1h")
-    s4h, t4h = analyze_tf(df_4h,  "4h")
-    s1d, t1d = analyze_tf(df_1d,  "1d")
+    s15, t15 = analyze_tf(df_15m, '15m')
+    s1h, t1h = analyze_tf(df_1h,  '1h')
+    s4h, t4h = analyze_tf(df_4h,  '4h')
+    s1d, t1d = analyze_tf(df_1d,  '1d')
 
-    logger.info(f"🔍 {symbol} | 15m: {s15}/{t15} | 1h: {s1h}/{t1h} | 4h: {s4h}/{t4h} | 1d: {s1d}/{t1d}")
+    logger.info(f"🔍 {symbol} | 15m:{s15}/{t15} | 1h:{s1h}/{t1h} | 4h:{s4h}/{t4h} | 1d:{s1d}/{t1d}")
 
-    # ==========================================
-    # AI PREDICTION — 4-TF Alignment
-    # ==========================================
-    trends = [t15, t1h, t4h, t1d]
-    non_neutral = [t for t in trends if t != "NEUTRAL"]
-
-    if len(non_neutral) == 0:
-        return None
-
-    # Count aligned trends
+    tfs = [(s15, t15), (s1h, t1h), (s4h, t4h), (s1d, t1d)]
+    trends = [t for _, t in tfs]
     long_count  = trends.count("LONG")
     short_count = trends.count("SHORT")
 
-    if long_count == 4:
-        trend = "LONG"
-        score = min(s15, s1h, s4h, s1d) + 20   # +20 bonus for 4-TF alignment
-        setup_label = "🏆 4-TF Aligned (MAX)"
-    elif short_count == 4:
-        trend = "SHORT"
-        score = min(s15, s1h, s4h, s1d) + 20
-        setup_label = "🏆 4-TF Aligned (MAX)"
-    elif long_count == 3:
-        trend = "LONG"
-        scores = [s for s, t in zip([s15, s1h, s4h, s1d], trends) if t == "LONG"]
-        score = min(scores) + 10
-        setup_label = "🔥 3-TF Aligned"
-    elif short_count == 3:
-        trend = "SHORT"
-        scores = [s for s, t in zip([s15, s1h, s4h, s1d], trends) if t == "SHORT"]
-        score = min(scores) + 10
-        setup_label = "🔥 3-TF Aligned"
-    elif long_count == 2:
-        trend = "LONG"
-        scores = [s for s, t in zip([s15, s1h, s4h, s1d], trends) if t == "LONG"]
-        score = max(scores)
-        setup_label = "⚡ 2-TF Aligned"
-    elif short_count == 2:
-        trend = "SHORT"
-        scores = [s for s, t in zip([s15, s1h, s4h, s1d], trends) if t == "SHORT"]
-        score = max(scores)
-        setup_label = "⚡ 2-TF Aligned"
+    if long_count >= MIN_ALIGNED_TF and short_count == 0:
+        trend, count = "LONG", long_count
+    elif short_count >= MIN_ALIGNED_TF and long_count == 0:
+        trend, count = "SHORT", short_count
     else:
+        return None   # mixed / opposite TF wale setups skip
+
+    scores = [s for s, t in tfs if t == trend]
+    tech_score = min(scores) + (20 if count == 4 else 10)
+    setup_label = "🏆 4-TF Aligned (MAX)" if count == 4 else "🔥 3-TF Aligned"
+
+    # AI check
+    ai_prob, ai_dir = ai_predict_direction(df_15m)
+    if ai_dir != "NEUTRAL" and ai_dir != trend:
+        logger.info(f"❌ {symbol} AI disagreed ({ai_dir} vs {trend}) — skipped")
         return None
 
-    if score < MIN_AI_SCORE:
+    final_score = (tech_score * 0.70) + (ai_prob * 100 * 0.30)
+    if final_score < MIN_FINAL_SCORE:
         return None
 
-    # ==========================================
-    # ATR-Based SL/TP
-    # ==========================================
-    close = df_15m['close']
-    price = close.iloc[-1]
-
-    atr_series = calculate_atr(df_15m, ATR_PERIOD)
-    atr = atr_series.iloc[-1]
+    # Entry = live price, risk = ATR-based with floor, TPs = R multiples
+    price = fetch_live_price(symbol) or df_15m['close'].iloc[-1]
+    atr = calculate_atr(df_1h, ATR_PERIOD).iloc[-1]
     if pd.isna(atr) or atr <= 0:
         return None
 
-    min_sl_distance = price * 0.02
-
+    risk = max(SL_ATR_MULT * atr, price * MIN_SL_PCT)
     if trend == "LONG":
         badge = "🟢 *BUY / LONG SIGNAL* 🟢"
-        sl_distance = max(SL_ATR_MULTIPLIER * atr, min_sl_distance)
-        sl  = round_price(price - sl_distance)
-        tp1 = round_price(price + (TP1_ATR_MULTIPLIER * atr))
-        tp2 = round_price(price + (TP2_ATR_MULTIPLIER * atr))
+        sl  = round_price(price - risk)
+        tp1 = round_price(price + risk * TP1_R)
+        tp2 = round_price(price + risk * TP2_R)
     else:
         badge = "🔴 *SELL / SHORT SIGNAL* 🔴"
-        sl_distance = max(SL_ATR_MULTIPLIER * atr, min_sl_distance)
-        sl  = round_price(price + sl_distance)
-        tp1 = round_price(price - (TP1_ATR_MULTIPLIER * atr))
-        tp2 = round_price(price - (TP2_ATR_MULTIPLIER * atr))
+        sl  = round_price(price + risk)
+        tp1 = round_price(price - risk * TP1_R)
+        tp2 = round_price(price - risk * TP2_R)
 
-    pair = symbol.replace('USDT', '')
-    if pair in ['PAXG', 'XAU']:
-        pair = 'XAU / GOLD'
+    pair = coin_name(symbol)
+
     msg = (
         f"{badge}\n"
         f"═══════════════════\n"
@@ -660,6 +666,8 @@ def analyze_and_build_signal(symbol, is_futures=False):
         f"═══════════════════\n"
         f"📈 *SETUP:* {setup_label}"
     )
+
+    now_ms = int(time.time() * 1000)
     return msg, pair, {
         'direction': trend,
         'entry': price,
@@ -668,124 +676,111 @@ def analyze_and_build_signal(symbol, is_futures=False):
         'tp2': tp2,
         'tp1_hit': False,
         'tp2_hit': False,
-        'signal_time': get_pakistan_time()
+        'signal_time': get_pakistan_time(),
+        'signal_ts_ms': now_ms,
+        'last_checked_ms': (now_ms // 60000 + 1) * 60000,   # agli poori 1m candle se check shuru
+        'score': round(final_score, 1),
     }
 
-
 def scan_signals():
-    global last_global_signal_time, daily_stats
+    global last_global_signal_time
     now = time.time()
     if (now - last_global_signal_time) < GLOBAL_COOLDOWN_SECONDS:
-        remaining = int(GLOBAL_COOLDOWN_SECONDS - (now - last_global_signal_time))
-        logger.info(f"⏸️ Global cooldown — {remaining}s remaining")
+        logger.info(f"⏸️ Global cooldown — {int(GLOBAL_COOLDOWN_SECONDS - (now - last_global_signal_time))}s left")
         return
+
+    candidates = []
     for symbol in WATCHLIST:
         try:
-            res = analyze_and_build_signal(symbol, is_futures=False)
+            coin = coin_name(symbol)
+            with state_lock:
+                if symbol in active_trades:
+                    continue
+                if (now - sent_history.get(coin, 0)) <= COOLDOWN_SECONDS:
+                    continue
+            res = analyze_and_build_signal(symbol)
             if res:
-                msg, coin, data = res
-                if (now - sent_history.get(coin, 0)) > COOLDOWN_SECONDS:
-                    msg_id = send_telegram_msg(msg)
-                    if msg_id:
-                        data['signal_message_id'] = msg_id
-                        sent_history[coin]        = now
-                        last_global_signal_time   = now
-                        with state_lock:
-                            active_trades[symbol] = data
-                        daily_stats['signals'] += 1
-                        daily_stats['pending'] += 1
-                        logger.info(f"✅ Signal sent: {coin} (msg_id: {msg_id})")
-                        return
+                candidates.append((symbol,) + res)
         except Exception as e:
             logger.error(f"[Scan] {symbol}: {e}")
-    logger.info("❌ No valid signal this scan")
 
+    if not candidates:
+        logger.info("❌ No valid signal this scan")
+        return
+
+    # sabse high score wala signal bhejo
+    symbol, msg, coin, data = max(candidates, key=lambda c: c[3]['score'])
+    msg_id = send_telegram_msg(msg)
+    if msg_id:
+        data['signal_message_id'] = msg_id
+        with state_lock:
+            sent_history[coin] = now
+            last_global_signal_time = now
+            active_trades[symbol] = data
+            daily_stats['signals'] += 1
+            daily_stats['pending'] += 1
+        save_state()
+        logger.info(f"✅ Signal sent: {coin} (score {data['score']}, {len(candidates)} candidates)")
 
 def send_daily_summary():
-    summary_msg = build_daily_summary()
-    send_admin_msg(summary_msg)
+    send_admin_msg(build_daily_summary())
     logger.info("📊 Daily summary sent")
 
-
+# ================== MAIN ==================
 def main_loop():
-    global last_daily_summary_date, daily_stats
-    logger.info("🚀 Signal Bot Started...")
-    logger.info(f"📢 Channel: {TELEGRAM_CHAT_ID}")
-    logger.info(f"👤 Admin: {TELEGRAM_ADMIN_ID}")
-    logger.info(f"🧠 Timeframes: 15m + 1h + 4h + 1D (4 TF)")
-    logger.info(f"🧠 Indicators: EMA20 + EMA50 + RSI + Volume + MACD + SAR")
-    logger.info(f"🎯 Min Score: {MIN_AI_SCORE}/100")
-    logger.info(f"⏸️ Global Cooldown: {GLOBAL_COOLDOWN_SECONDS}s ({GLOBAL_COOLDOWN_SECONDS//60} min)")
-    logger.info(f"💰 SL/TP: ATR-Based (SL={SL_ATR_MULTIPLIER}x, TP1={TP1_ATR_MULTIPLIER}x, TP2={TP2_ATR_MULTIPLIER}x)")
+    global last_daily_summary_date
+    logger.info("🚀 Bot v2 Started")
     last_signal_scan = 0
+
     while True:
         try:
-            now = time.time()
             reset_daily_stats_if_needed()
             check_active_trade_results()
-            if (now - last_signal_scan) >= SIGNAL_SCAN_INTERVAL:
-                logger.info("🔍 Signal scan starting...")
+
+            if (time.time() - last_signal_scan) >= SIGNAL_SCAN_INTERVAL:
+                logger.info("🔍 Scanning...")
+                last_signal_scan = time.time()
                 scan_signals()
-                last_signal_scan = now
-                logger.info(f"✅ Scan done. Active: {len(active_trades)}")
-            current_date = get_pakistan_date()
-            current_hour = get_pakistan_hour()
-            if current_hour == DAILY_SUMMARY_HOUR and last_daily_summary_date != current_date:
+
+            if get_pakistan_hour() == DAILY_SUMMARY_HOUR and last_daily_summary_date != get_pakistan_date():
                 send_daily_summary()
-                last_daily_summary_date = current_date
+                last_daily_summary_date = get_pakistan_date()
+                save_state()
+
             time.sleep(TP_SL_CHECK_INTERVAL)
         except Exception as e:
             logger.error(f"[MainLoop] {e}")
             time.sleep(60)
 
-
 @app.route('/')
 def health():
     return "Bot is running 24/7!", 200
 
-
 @app.route('/status')
 def status():
-    win_rate, total_closed = get_win_rate()
-    return {
-        "status": "alive",
-        "active_trades": len(active_trades),
-        "today_signals": daily_stats['signals'],
-        "today_win_rate": f"{win_rate}%",
-        "closed_trades": total_closed,
-        "timeframes": "15m + 1h + 4h + 1D",
-        "indicators": "EMA + RSI + Volume + MACD + SAR (5)",
-        "min_score": MIN_AI_SCORE,
-        "global_cooldown": GLOBAL_COOLDOWN_SECONDS,
-        "sl_tp_method": "ATR-Based",
-        "time": get_pakistan_time()
-    }, 200
-
-
-@app.route('/stats')
-def stats_route():
-    return {
-        "today": daily_stats,
-        "history": trade_log[-7:],
-        "active": len(active_trades)
-    }, 200
-
+    with state_lock:
+        win_rate, total = get_win_rate()
+        return {
+            "status": "alive",
+            "active_trades": len(active_trades),
+            "today_signals": daily_stats['signals'],
+            "win_rate": f"{win_rate}%",
+            "closed": total,
+            "time": get_pakistan_time()
+        }, 200
 
 _scanner_started = False
-_scanner_lock    = threading.Lock()
-
+_scanner_lock = threading.Lock()
 
 def start_scanner_once():
     global _scanner_started
     with _scanner_lock:
         if not _scanner_started:
+            load_state()
             threading.Thread(target=main_loop, daemon=True).start()
             _scanner_started = True
-            logger.info("🔧 Scanner thread launched.")
-
 
 start_scanner_once()
-
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 10000))
