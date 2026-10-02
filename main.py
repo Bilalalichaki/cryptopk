@@ -31,7 +31,6 @@ if TELEGRAM_BOT_TOKEN == "xxxx" or TELEGRAM_CHAT_ID == "xxxx":
     raise SystemExit("❌ Render pe TELEGRAM_BOT_TOKEN & TELEGRAM_CHAT_ID set karo!")
 
 PROXIES = None
-# Render pe persistent disk mount karo (e.g. /data) aur STATE_FILE=/data/bot_state.json set karo
 STATE_FILE = os.environ.get("STATE_FILE", "bot_state.json")
 
 WATCHLIST = [
@@ -50,18 +49,18 @@ TRADE_EXPIRY_HOURS      = 48
 
 VOLUME_FILTER_ENABLED = True
 VOLUME_THRESHOLD      = 0.8
-VOLUME_FILTER_TFS     = ('15m', '1h')   # 4h/1d pe volume filter nahi
+VOLUME_FILTER_TFS     = ('15m', '1h')
 
-MIN_ALIGNED_TF = 3          # kam az kam itne timeframes ek direction mein
+MIN_ALIGNED_TF = 3
 
-# Risk model: SL distance se TP nikalte hain, taake RR hamesha fixed rahe
 ATR_PERIOD    = 14
 SL_ATR_MULT   = 1.5
-MIN_SL_PCT    = 0.006       # SL kam az kam 0.6% door
-TP1_R         = 1.2         # TP1 = 1.2R
-TP2_R         = 2.5         # TP2 = 2.5R
+MIN_SL_PCT    = 0.006
+TP1_R         = 1.2
+TP2_R         = 2.5
 
-AI_MIN_ACCURACY = 0.52      # holdout accuracy is se kam ho to AI ko ignore karo
+AI_MIN_ACCURACY = 0.52
+AI_CACHE_SECONDS = 3600    # ← AI model 1 hour cache
 
 # ================== STATE ==================
 sent_history            = {}
@@ -75,6 +74,10 @@ state_lock              = threading.RLock()
 last_global_signal_time = 0
 last_daily_summary_date = None
 
+# AI Model Cache (symbol -> {timestamp, model, accuracy})
+_ai_cache = {}
+_ai_cache_lock = threading.Lock()
+
 # ================== HELPERS ==================
 def get_pakistan_time():
     return datetime.now(ZoneInfo('Asia/Karachi')).strftime("%d-%b-%Y | %I:%M %p")
@@ -87,6 +90,10 @@ def get_pakistan_hour():
 
 def pk_time_from_ms(ms):
     return datetime.fromtimestamp(int(ms) / 1000, ZoneInfo('Asia/Karachi')).strftime("%d-%b-%Y | %I:%M %p")
+
+def pk_short_time(ms):
+    """Short time format for summary: 03:45 PM"""
+    return datetime.fromtimestamp(int(ms) / 1000, ZoneInfo('Asia/Karachi')).strftime("%I:%M %p")
 
 def round_price(p):
     if p >= 1000:     return round(p, 2)
@@ -115,7 +122,7 @@ def save_state():
         tmp = STATE_FILE + ".tmp"
         with open(tmp, "w") as f:
             f.write(payload)
-        os.replace(tmp, STATE_FILE)   # atomic write
+        os.replace(tmp, STATE_FILE)
     except Exception as e:
         logger.error(f"Save state error: {e}")
 
@@ -147,7 +154,6 @@ def _to_df(data):
         df[c] = df[c].astype(float)
     df['time'] = df['time'].astype('int64')
     df['close_time'] = df['close_time'].astype('int64')
-    # sirf CLOSED candles rakho (chalti hui candle hata do)
     now_ms = int(time.time() * 1000)
     df = df[df['close_time'] < now_ms].reset_index(drop=True)
     return df
@@ -168,7 +174,6 @@ def fetch_klines(symbol, timeframe, limit=100, futures=False):
         return None
 
 def fetch_klines_since(symbol, start_ms, interval='1m'):
-    """start_ms ke baad ki closed candles (TP/SL tracking ke liye)"""
     try:
         url = (f"https://data-api.binance.vision/api/v3/klines?symbol={symbol}"
                f"&interval={interval}&startTime={int(start_ms)}&limit=1000")
@@ -283,42 +288,74 @@ def build_features(df):
     df['sar_trend'] = calculate_parabolic_sar(df)['sar_trend']
     return df
 
-def ai_predict_direction(df, horizon=3):
+def ai_predict_direction(df, horizon=3, symbol=""):
     """
     Returns (confidence, direction). Direction: LONG / SHORT / NEUTRAL.
-    - Train sirf un rows pe jinka future result maloom hai (last `horizon` rows nahi)
-    - Predict LATEST closed candle pe
-    - Holdout accuracy kam ho to model ko unreliable maan ke NEUTRAL (0.5) return
+    Cache: model 1 hour tak save rehta hai (per symbol).
     """
     try:
         if df is None or len(df) < 150:
             return 0.5, "NEUTRAL"
 
+        # ---- Cache check ----
+        if symbol:
+            with _ai_cache_lock:
+                cached = _ai_cache.get(symbol)
+                if cached and (time.time() - cached['time']) < AI_CACHE_SECONDS:
+                    # Cached model se predict karo
+                    feat = build_features(df)
+                    feat = feat.dropna(subset=AI_FEATURES)
+                    if len(feat) < 1:
+                        return 0.5, "NEUTRAL"
+                    latest_x = feat[AI_FEATURES].iloc[[-1]].values
+                    model = cached['model']
+                    if model is None:
+                        return 0.5, "NEUTRAL"
+                    proba = model.predict_proba(latest_x)[0]
+                    long_prob = proba[1] if len(proba) > 1 else 0.5
+                    if long_prob >= 0.60:
+                        return long_prob, "LONG"
+                    if long_prob <= 0.40:
+                        return 1 - long_prob, "SHORT"
+                    return 0.5, "NEUTRAL"
+
+        # ---- Fresh training ----
         feat = build_features(df)
         feat['future_return'] = feat['close'].shift(-horizon) / feat['close'] - 1
         feat = feat.dropna(subset=AI_FEATURES)
         if len(feat) < 120:
             return 0.5, "NEUTRAL"
 
-        latest_x = feat[AI_FEATURES].iloc[[-1]].values        # current candle
-        labeled = feat.dropna(subset=['future_return'])        # known outcomes only
+        latest_x = feat[AI_FEATURES].iloc[[-1]].values
+        # Data leakage fix: latest row hata do (jiska future unknown hai)
+        labeled = feat.dropna(subset=['future_return']).iloc[:-1]
         X = labeled[AI_FEATURES].values
         y = (labeled['future_return'] > 0).astype(int).values
         if len(X) < 100 or len(np.unique(y)) < 2:
             return 0.5, "NEUTRAL"
 
-        # time-ordered holdout check (purge `horizon` rows beech mein)
+        # Holdout check
         split = int(len(X) * 0.8)
         m_val = RandomForestClassifier(n_estimators=60, max_depth=5, min_samples_leaf=5,
                                        random_state=42, n_jobs=1)
         m_val.fit(X[:split - horizon], y[:split - horizon])
         acc = (m_val.predict(X[split:]) == y[split:]).mean()
         if acc < AI_MIN_ACCURACY:
+            # Cache karo — skip signal
+            if symbol:
+                with _ai_cache_lock:
+                    _ai_cache[symbol] = {'time': time.time(), 'model': None}
             return 0.5, "NEUTRAL"
 
         model = RandomForestClassifier(n_estimators=60, max_depth=5, min_samples_leaf=5,
                                        random_state=42, n_jobs=1)
         model.fit(X, y)
+
+        # Cache save
+        if symbol:
+            with _ai_cache_lock:
+                _ai_cache[symbol] = {'time': time.time(), 'model': model}
+
         proba = model.predict_proba(latest_x)[0]
         long_prob = proba[1] if len(proba) > 1 else 0.5
 
@@ -347,7 +384,6 @@ def analyze_tf(df, timeframe_label=""):
     bull, bear = 0, 0
     price = close.iloc[-1]
 
-    # EMA
     ema20 = close.ewm(span=20, adjust=False).mean()
     ema50 = close.ewm(span=50, adjust=False).mean()
     if price > ema20.iloc[-1] > ema50.iloc[-1]:
@@ -359,7 +395,6 @@ def analyze_tf(df, timeframe_label=""):
     elif price < ema20.iloc[-1]:
         bear += 15
 
-    # RSI
     delta = close.diff()
     gain = (delta.where(delta > 0, 0)).rolling(14).mean()
     loss = (-delta.where(delta < 0, 0)).rolling(14).mean()
@@ -371,12 +406,10 @@ def analyze_tf(df, timeframe_label=""):
     elif rsi_val > 70: bear += 25
     elif rsi_val > 55: bear += 12
 
-    # Volume
     if volume.iloc[-1] > avg_vol * 1.3:
         if bull > bear:   bull += 20
         elif bear > bull: bear += 20
 
-    # MACD
     ema12 = close.ewm(span=12, adjust=False).mean()
     ema26 = close.ewm(span=26, adjust=False).mean()
     macd_line = ema12 - ema26
@@ -387,7 +420,6 @@ def analyze_tf(df, timeframe_label=""):
     elif hist.iloc[-1] < 0:
         bear += 15
 
-    # SAR
     sar_df = calculate_parabolic_sar(df)
     if sar_df['sar_trend'].iloc[-1] == 1 and sar_df['sar'].iloc[-1] < price:
         bull += 10
@@ -440,44 +472,71 @@ def reset_daily_stats_if_needed():
     save_state()
 
 def get_win_rate(stats=None):
-    """Win = TP1 tak pohanchne wala trade (TP2 wale bhi TP1 cross karte hain, isliye double count nahi)."""
     if stats is None: stats = daily_stats
     wins = stats['tp1_hits']
     total = wins + stats['sl_hits']
     if total == 0: return 0, 0
     return round(wins / total * 100, 1), total
 
-RESULT_TEXT = {
-    'TP2': 'TP2 ✅✅', 'TP1': 'TP1 ✅ (trade chal raha)', 'SL': 'SL ❌',
-    'BE': 'TP1 ✅ → Entry pe close ➖', 'EXPIRED': 'Expired ⌛', 'PENDING': 'Pending ⏳'
+RESULT_EMOJI = {
+    'TP2': '🏆 TP2', 'TP1': '✅ TP1 (running)', 'SL': '❌ SL',
+    'BE': '➖ BE', 'EXPIRED': '⌛ Expired', 'PENDING': '⏳ Pending'
 }
 
 def _trade_block(i, t):
+    """Compact trade block."""
     d_emoji = "🟢" if t.get('direction') == 'LONG' else "🔴"
     res = t.get('result', 'PENDING')
-    lines = [
-        f"*{i}. {d_emoji} {t.get('coin')}* | {t.get('direction')} | {RESULT_TEXT.get(res, res)}",
-        f"   📥 Entry: `{t.get('entry')}`",
-        f"   🕒 Entry Time: `{t.get('signal_time', '-')}`",
-        f"   🎯 TP1: `{t.get('tp1')}` | TP2: `{t.get('tp2')}` | SL: `{t.get('sl_orig')}`",
-    ]
+    res_emoji = RESULT_EMOJI.get(res, res)
+
+    coin = t.get('coin', 'N/A')
+    direction = t.get('direction', 'N/A')
+    entry = t.get('entry', 'N/A')
+    tp1 = t.get('tp1', 'N/A')
+    tp2 = t.get('tp2', 'N/A')
+    sl = t.get('sl_orig', 'N/A')
+
+    # Entry time (short)
+    sig_time = t.get('signal_time', '-')
+    if '|' in sig_time:
+        sig_time = sig_time.split('|')[1].strip()
+
+    line1 = f"*{i}. {d_emoji} {coin}* | {direction} | {res_emoji}"
+    line2 = f"   📥 `{entry}` → 🎯 `{tp1}` / `{tp2}` | 🛑 `{sl}`"
+    line3 = f"   🕒 Entry: `{sig_time}`"
+
+    extras = []
     if t.get('tp1_time'):
-        lines.append(f"   ✅ TP1 Hit: `{t['tp1_time']}`")
-    if res == 'TP2':
-        lines.append(f"   🏆 TP2 Hit: `{t.get('close_time')}`")
-    elif res == 'SL':
-        lines.append(f"   🛑 SL Hit: `{t.get('close_time')}`")
-    elif res == 'BE':
-        lines.append(f"   ➖ Entry pe close: `{t.get('close_time')}`")
-    elif res == 'EXPIRED':
-        lines.append(f"   ⌛ Expire: `{t.get('close_time')}`")
-    return "\n".join(lines)
+        tp1_t = t['tp1_time']
+        if '|' in tp1_t: tp1_t = tp1_t.split('|')[1].strip()
+        extras.append(f"✅ TP1: `{tp1_t}`")
+    if res == 'TP2' and t.get('close_time'):
+        ct = t['close_time']
+        if '|' in ct: ct = ct.split('|')[1].strip()
+        extras.append(f"🏆 TP2: `{ct}`")
+    elif res == 'SL' and t.get('close_time'):
+        ct = t['close_time']
+        if '|' in ct: ct = ct.split('|')[1].strip()
+        extras.append(f"🛑 SL: `{ct}`")
+    elif res == 'BE' and t.get('close_time'):
+        ct = t['close_time']
+        if '|' in ct: ct = ct.split('|')[1].strip()
+        extras.append(f"➖ BE: `{ct}`")
+    elif res == 'EXPIRED' and t.get('close_time'):
+        ct = t['close_time']
+        if '|' in ct: ct = ct.split('|')[1].strip()
+        extras.append(f"⌛ Exp: `{ct}`")
+
+    if extras:
+        line3 += " | " + " | ".join(extras)
+
+    return f"{line1}\n{line2}\n{line3}"
 
 def build_daily_summary():
     with state_lock:
         stats = json.loads(json.dumps(daily_stats))
         trades = list(stats.get('trade_details', []))
-        for sym, t in active_trades.items():       # abhi khule trades bhi dikhao
+        for sym, t in active_trades.items():
             trades.append({
                 'coin': coin_name(sym), 'direction': t['direction'],
                 'entry': round_price(t['entry']), 'tp1': t['tp1'], 'tp2': t['tp2'],
@@ -491,14 +550,10 @@ def build_daily_summary():
     msg = (
         f"📊 *DAILY SUMMARY — {stats['date']}*\n"
         f"═══════════════════════════════\n\n"
-        f"📈 *Total Signals:* `{stats['signals']}`\n\n"
-        f"✅ *TP1 Hits:* `{stats['tp1_hits']}` (TP2 included)\n"
-        f"🏆 *TP2 Hits:* `{stats['tp2_hits']}`\n"
-        f"🛑 *SL Hits:* `{stats['sl_hits']}`\n"
-        f"⏳ *Pending:* `{stats['pending']}`\n\n"
-        f"═══════════════════════════════\n"
-        f"🎯 *Win Rate:* `{win_rate}%` {emoji}\n"
-        f"📊 *Closed Trades:* `{total_closed}`\n"
+        f"📈 *Signals:* `{stats['signals']}`  |  "
+        f"✅ *TP1:* `{stats['tp1_hits']}`  |  🏆 *TP2:* `{stats['tp2_hits']}`\n"
+        f"🛑 *SL:* `{stats['sl_hits']}`  |  ⏳ *Pending:* `{stats['pending']}`\n\n"
+        f"🎯 *Win Rate:* `{win_rate}%` {emoji}  |  📊 *Closed:* `{total_closed}`\n"
         f"═══════════════════════════════\n"
     )
     if trades:
@@ -507,7 +562,6 @@ def build_daily_summary():
     return msg
 
 def split_message(text, limit=3800):
-    """Telegram 4096 chars se lambi message nahi leta, isliye trade blocks ke beech se todo."""
     parts, cur = [], ""
     for block in text.split("\n\n"):
         if len(cur) + len(block) + 2 > limit and cur:
@@ -544,11 +598,6 @@ def _is_long(trade):
     return trade['direction'] == 'LONG'
 
 def process_trade_candles(symbol, trade, df, outbox):
-    """
-    Closed 1m candles ko time order mein process karta hai.
-    Ek hi candle mein SL aur TP dono touch hon to SL pehle maana jata hai (conservative).
-    Hit time candle ke asli time se aata hai. Returns True agar trade close ho gaya.
-    """
     pair = coin_name(symbol)
     is_long = _is_long(trade)
     reply = trade.get('signal_message_id')
@@ -588,7 +637,7 @@ def process_trade_candles(symbol, trade, df, outbox):
             if tp1_hit:
                 trade['tp1_hit'] = True
                 trade['tp1_time'] = ht
-                trade['sl'] = round_price(trade['entry'])     # breakeven
+                trade['sl'] = round_price(trade['entry'])
                 daily_stats['tp1_hits'] += 1
                 outbox.append((_hit_msg('TP1', trade, pair, trade['tp1'], ht), reply))
                 if tp2_hit:
@@ -604,7 +653,6 @@ def process_trade_candles(symbol, trade, df, outbox):
                 finish('TP2', trade['tp2'], ht)
                 return True
 
-    # expiry
     age_h = (time.time() * 1000 - trade['signal_ts_ms']) / 3600000
     if age_h > TRADE_EXPIRY_HOURS:
         finish('EXPIRED', None, get_pakistan_time())
@@ -623,7 +671,7 @@ def check_active_trade_results():
             start = trade.get('last_checked_ms') or trade['signal_ts_ms']
             start = int(start)
 
-        df = fetch_klines_since(symbol, start)      # network lock ke bahar
+        df = fetch_klines_since(symbol, start)
         if df is None:
             continue
 
@@ -637,7 +685,7 @@ def check_active_trade_results():
                 closed = process_trade_candles(symbol, trade, df, outbox)
                 trade['last_checked_ms'] = int(df['time'].iloc[-1]) + 60000
             else:
-                closed = process_trade_candles(symbol, trade, df, outbox)  # sirf expiry check
+                closed = process_trade_candles(symbol, trade, df, outbox)
             if closed:
                 active_trades.pop(symbol, None)
 
@@ -672,14 +720,14 @@ def analyze_and_build_signal(symbol, is_futures=False):
     elif short_count >= MIN_ALIGNED_TF and long_count == 0:
         trend, count = "SHORT", short_count
     else:
-        return None   # mixed / opposite TF wale setups skip
+        return None
 
     scores = [s for s, t in tfs if t == trend]
     tech_score = min(scores) + (20 if count == 4 else 10)
     setup_label = "🏆 4-TF Aligned (MAX)" if count == 4 else "🔥 3-TF Aligned"
 
-    # AI check
-    ai_prob, ai_dir = ai_predict_direction(df_15m)
+    # AI check (with cache)
+    ai_prob, ai_dir = ai_predict_direction(df_15m, symbol=symbol)
     if ai_dir != "NEUTRAL" and ai_dir != trend:
         logger.info(f"❌ {symbol} AI disagreed ({ai_dir} vs {trend}) — skipped")
         return None
@@ -688,7 +736,6 @@ def analyze_and_build_signal(symbol, is_futures=False):
     if final_score < MIN_FINAL_SCORE:
         return None
 
-    # Entry = live price, risk = ATR-based with floor, TPs = R multiples
     price = fetch_live_price(symbol) or df_15m['close'].iloc[-1]
     atr = calculate_atr(df_1h, ATR_PERIOD).iloc[-1]
     if pd.isna(atr) or atr <= 0:
@@ -734,7 +781,7 @@ def analyze_and_build_signal(symbol, is_futures=False):
         'tp2_hit': False,
         'signal_time': get_pakistan_time(),
         'signal_ts_ms': now_ms,
-        'last_checked_ms': (now_ms // 60000 + 1) * 60000,   # agli poori 1m candle se check shuru
+        'last_checked_ms': (now_ms // 60000 + 1) * 60000,
         'score': round(final_score, 1),
     }
 
@@ -764,7 +811,6 @@ def scan_signals():
         logger.info("❌ No valid signal this scan")
         return
 
-    # sabse high score wala signal bhejo
     symbol, msg, coin, data = max(candidates, key=lambda c: c[3]['score'])
     msg_id = send_telegram_msg(msg)
     if msg_id:
