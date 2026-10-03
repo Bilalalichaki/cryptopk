@@ -9,6 +9,7 @@ from zoneinfo import ZoneInfo
 import threading
 import logging
 from flask import Flask
+import shadow
 from sklearn.ensemble import RandomForestClassifier
 import warnings
 warnings.filterwarnings("ignore")
@@ -730,6 +731,7 @@ def analyze_and_build_signal(symbol, is_futures=False):
     ai_prob, ai_dir = ai_predict_direction(df_15m, symbol=symbol)
     if ai_dir != "NEUTRAL" and ai_dir != trend:
         logger.info(f"❌ {symbol} AI disagreed ({ai_dir} vs {trend}) — skipped")
+        shadow.on_veto(symbol, trend, tech_score, df_1h)
         return None
 
     final_score = (tech_score * 0.70) + (ai_prob * 100 * 0.30)
@@ -840,6 +842,7 @@ def main_loop():
         try:
             reset_daily_stats_if_needed()
             check_active_trade_results()
+            shadow.tick()
 
             if (time.time() - last_signal_scan) >= SIGNAL_SCAN_INTERVAL:
                 logger.info("🔍 Scanning...")
